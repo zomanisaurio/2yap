@@ -376,6 +376,7 @@
   .comment-actions{display:flex; gap:12px; margin-top:3px;}
   .comment-actions button{background:none; box-shadow:none; padding:0; font-size:11.5px; font-weight:600; color:var(--text-mute); border-radius:0;}
   .comment-actions button.liked{color:var(--red);}
+  .comment-actions button.cmt-delete{color:var(--red);}
   .comment-replies{margin-left:36px; margin-top:6px; display:flex; flex-direction:column; gap:8px;}
   .reply-input-row{display:none; gap:6px; margin-top:6px; margin-left:36px;}
   .reply-input-row.open{display:flex;}
@@ -520,8 +521,34 @@ function isAdmin(){ return !!(currentUser && ADMIN_EMAILS.includes((currentUser.
 const REPORT_EMAIL_TARGET = 'zomanifrance@gmail.com';
 const BAN_THRESHOLD = 5;
 let unsubscribers = [];
+let userDocUnsub = null;
+let scrollBatchSize = 20;
 
 function clearListeners(){ unsubscribers.forEach(u=>u()); unsubscribers=[]; }
+
+/* ---------------- REAL-TIME BAN / ACCOUNT STATUS ENFORCEMENT ---------------- */
+function banMessage(banType){
+  return banType==='def'
+    ? 'Ton compte a été banni définitivement suite à des signalements. Cette décision est irrévocable.'
+    : 'Ton compte a été suspendu suite à des signalements. Contacte un administrateur si tu penses que c\'est une erreur.';
+}
+function listenUserStatus(uid){
+  if(userDocUnsub){ userDocUnsub(); userDocUnsub=null; }
+  userDocUnsub = db.collection('users').doc(uid).onSnapshot(doc=>{
+    if(!currentUser) return;
+    if(!doc.exists){ forceSignOut('Ton compte a été supprimé par un administrateur.'); return; }
+    const d = doc.data();
+    if(d.accountDeleted){ forceSignOut('Ton compte a été supprimé par un administrateur.'); return; }
+    if(d.banned){ forceSignOut(banMessage(d.banType)); return; }
+    currentUser = {uid, ...d};
+  }, ()=>{});
+}
+async function forceSignOut(message){
+  if(userDocUnsub){ userDocUnsub(); userDocUnsub=null; }
+  await auth.signOut();
+  const msgEl = document.getElementById('authMsg');
+  if(msgEl) msgEl.textContent = message;
+}
 
 function toast(msg){
   const t = document.createElement('div');
@@ -786,6 +813,7 @@ function renderCommentNode(cm, replies){
         <div class="comment-actions">
           <button class="cmt-like ${liked?'liked':''}">❤️ ${(cm.likes||[]).length}</button>
           <button class="cmt-reply">Répondre</button>
+          ${(cm.authorUid===currentUser.uid || isAdmin())? `<button class="cmt-delete">🗑️</button>`:''}
         </div>
         <div class="reply-input-row" id="replyRow-${cm.id}">
           <input placeholder="Répondre à ${esc(cm.authorPseudo)}...">
@@ -795,6 +823,7 @@ function renderCommentNode(cm, replies){
     </div>
   `;
   wrap.querySelector('.cmt-like').onclick = ()=> toggleCommentLike(cm.id);
+  wrap.querySelector('.cmt-delete')?.addEventListener('click', ()=> deleteComment(cm.id));
   const replyRow = wrap.querySelector('.reply-input-row');
   wrap.querySelector('.cmt-reply').onclick = ()=> replyRow.classList.toggle('open');
   const replyInput = replyRow.querySelector('input');
@@ -823,6 +852,20 @@ async function toggleCommentLike(commentId){
   });
 }
 
+async function deleteComment(commentId){
+  if(!commentsCurrentPostId) return;
+  if(!confirm('Supprimer ce commentaire ?')) return;
+  try{
+    const postId = commentsCurrentPostId;
+    const repliesSnap = await db.collection('posts').doc(postId).collection('comments').where('parentId','==',commentId).get();
+    if(!repliesSnap.empty){
+      const batch = db.batch();
+      repliesSnap.forEach(d=> batch.delete(d.ref));
+      await batch.commit();
+    }
+    await db.collection('posts').doc(postId).collection('comments').doc(commentId).delete();
+  }catch(err){ toast('Erreur : '+err.message); }
+}
 function closeComments(){
   document.getElementById('commentsOverlay').classList.remove('open');
   document.getElementById('commentsModal').classList.remove('open');
@@ -953,7 +996,7 @@ async function checkAutoBan(uid){
     if(ADMIN_EMAILS.includes(email)) return; // jamais les admins
     const reportsSnap = await db.collection('reports').where('reportedUid','==',uid).get();
     if(reportsSnap.size >= BAN_THRESHOLD && !userDoc.data().banned){
-      await db.collection('users').doc(uid).update({banned:true});
+      await db.collection('users').doc(uid).update({banned:true, banType:'normal'});
     }
   }catch(e){ console.warn('checkAutoBan', e); }
 }
@@ -1010,13 +1053,26 @@ function translateErr(e){
 
 auth.onAuthStateChanged(async user=>{
   clearListeners();
+  if(userDocUnsub){ userDocUnsub(); userDocUnsub=null; }
   if(user){
     const doc = await db.collection('users').doc(user.uid).get();
+    if(!doc.exists){
+      await auth.signOut();
+      currentUser = null;
+      document.getElementById('authMsg').textContent = 'Ton compte a été supprimé par un administrateur.';
+      return;
+    }
     currentUser = {uid:user.uid, ...doc.data()};
+    if(currentUser.accountDeleted){
+      await auth.signOut();
+      currentUser = null;
+      document.getElementById('authMsg').textContent = 'Ton compte a été supprimé par un administrateur.';
+      return;
+    }
     if(currentUser.banned){
       await auth.signOut();
       currentUser = null;
-      document.getElementById('authMsg').textContent = 'Ce compte a été suspendu suite à des signalements. Contacte un administrateur si tu penses que c\'est une erreur.';
+      document.getElementById('authMsg').textContent = banMessage(currentUser.banType);
       return;
     }
     document.getElementById('screen-auth').classList.add('hidden');
@@ -1026,6 +1082,7 @@ auth.onAuthStateChanged(async user=>{
     document.getElementById('adminLink').classList.toggle('hidden', !isAdmin());
     listenMyCommunities();
     listenNotifications();
+    listenUserStatus(user.uid);
     if(!location.hash) location.hash = '#home';
     router();
   }else{
@@ -1237,7 +1294,7 @@ function renderPostCard(id, p){
       <button class="vote-btn ${disliked?'active-dislike':''}" data-act="dislike">👎 ${(p.dislikes||[]).length}</button>
       <button class="vote-btn" data-act="comments">💬 <span class="cmt-count">···</span></button>
       ${p.authorUid!==currentUser.uid? `<button class="vote-btn" data-act="report" style="margin-left:auto;">🚩</button>`:''}
-      ${p.authorUid===currentUser.uid? `<button class="vote-btn" data-act="delete" style="margin-left:auto;color:var(--red);">🗑️</button>`:''}
+      ${(p.authorUid===currentUser.uid || isAdmin())? `<button class="vote-btn" data-act="delete" style="margin-left:${p.authorUid!==currentUser.uid?'6px':'auto'};color:var(--red);">🗑️</button>`:''}
     </div>
   `;
   div.querySelectorAll('.vote-btn').forEach(btn=>{
@@ -1391,26 +1448,35 @@ function renderPeople(main){
 /* ---------------- GLOBAL SCROLL (toutes tes communautés, façon TikTok) ---------------- */
 function renderScroll(main){
   main.innerHTML = '<div class="panel"><div class="panel-head">🎬 Scroll — le court de tes communautés</div><div class="panel-body" id="scrollBody" style="padding:0;"><div class="empty">Chargement...</div></div></div>';
+  scrollBatchSize = 20;
   db.collection('communities').where('members','array-contains',currentUser.uid).get().then(csnap=>{
     const ids = []; csnap.forEach(d=> ids.push(d.id));
     const body = document.getElementById('scrollBody');
     if(!body) return;
     if(ids.length===0){ body.innerHTML = '<div class="empty">Rejoins une communauté pour voir son contenu ici.</div>'; return; }
-    const un = db.collection('posts').orderBy('createdAt','desc').limit(200).onSnapshot(snap=>{
-      let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
-      posts = posts.filter(p=> ids.includes(p.communityId) && (p.mediaType==='video'||p.mediaType==='image'));
-      const container = document.getElementById('scrollBody');
-      if(container) renderImmersiveFeed(container, posts);
-    }, err=>{
-      console.error(err);
-      const b = document.getElementById('scrollBody');
-      if(b) b.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
-    });
-    unsubscribers.push(un);
+    subscribeScrollFeed(ids);
   }).catch(err=>{
     const b = document.getElementById('scrollBody');
     if(b) b.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
   });
+}
+
+function subscribeScrollFeed(ids){
+  const un = db.collection('posts').orderBy('createdAt','desc').limit(scrollBatchSize).onSnapshot(snap=>{
+    const reachedEnd = snap.size < scrollBatchSize;
+    let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
+    posts = posts.filter(p=> ids.includes(p.communityId) && (p.mediaType==='video'||p.mediaType==='image'));
+    const container = document.getElementById('scrollBody');
+    if(container) renderImmersiveFeed(container, posts, reachedEnd? null : ()=>{
+      scrollBatchSize += 20;
+      subscribeScrollFeed(ids);
+    });
+  }, err=>{
+    console.error(err);
+    const b = document.getElementById('scrollBody');
+    if(b) b.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+  });
+  unsubscribers.push(un);
 }
 
 /* ---------------- EXPLORE ---------------- */
@@ -1811,7 +1877,7 @@ async function renderCommunityFeed(feed, posts, c){
         <button class="post-dislikes" onclick="parent.postMessage({type:'vote',id:'${p.id}',act:'dislike'},'*')">👎 ${(p.dislikes||[]).length}</button>
         <button class="post-comments" onclick="parent.postMessage({type:'comments',id:'${p.id}'},'*')">💬 ${counts[i]}</button>
         ${p.authorUid!==currentUser.uid? `<button class="post-report" data-uid="${esc(p.authorUid)}" data-pseudo="${esc(p.authorPseudo)}" data-target="${esc(p.id)}">🚩</button>`:''}
-        ${p.authorUid===currentUser.uid? `<button class="post-delete" onclick="parent.postMessage({type:'delete',id:'${p.id}'},'*')">🗑️</button>`:''}
+        ${(p.authorUid===currentUser.uid || isAdmin())? `<button class="post-delete" onclick="parent.postMessage({type:'delete',id:'${p.id}'},'*')">🗑️</button>`:''}
       </div>
     </div>
   `).join('');
@@ -1847,7 +1913,7 @@ async function renderCommunityFeed(feed, posts, c){
 }
 
 /* ---------------- IMMERSIVE SHORT-FORM FEED ---------------- */
-function renderImmersiveFeed(container, posts){
+function renderImmersiveFeed(container, posts, onLoadMore){
   if(!container) return;
   if(posts.length===0){ container.innerHTML = '<div class="empty">Aucun contenu court pour le moment. Poste une photo, un GIF ou une vidéo !</div>'; return; }
   container.innerHTML = '<div id="immersiveFeed"></div>';
@@ -1871,7 +1937,7 @@ function renderImmersiveFeed(container, posts){
         <button class="imv-btn" data-act="comments">💬</button>
         ${p.mediaType==='video'? `<button class="imv-btn" data-act="mute">🔇</button>`:''}
         ${p.authorUid!==currentUser.uid? `<button class="imv-btn" data-act="report">🚩</button>`:''}
-        ${p.authorUid===currentUser.uid? `<button class="imv-btn" data-act="delete" style="color:#ff8a8a;">🗑️</button>`:''}
+        ${(p.authorUid===currentUser.uid || isAdmin())? `<button class="imv-btn" data-act="delete" style="color:#ff8a8a;">🗑️</button>`:''}
       </div>
     `;
     item.querySelectorAll('.imv-btn').forEach(btn=>{
@@ -1891,6 +1957,16 @@ function renderImmersiveFeed(container, posts){
     feedEl.appendChild(item);
   });
   setupImmersiveObserver(feedEl);
+  if(onLoadMore){
+    let triggered = false;
+    feedEl.addEventListener('scroll', ()=>{
+      if(triggered) return;
+      if(feedEl.scrollTop + feedEl.clientHeight >= feedEl.scrollHeight - feedEl.clientHeight*1.5){
+        triggered = true;
+        onLoadMore();
+      }
+    });
+  }
 }
 
 function toggleImmersiveSound(item, btn){
@@ -1956,22 +2032,60 @@ function renderAdmin(main){
     body.innerHTML = '';
     uids.forEach((uid, i)=>{
       const g = grouped[uid];
-      const banned = userDocs[i].exists && userDocs[i].data().banned;
+      const exists = userDocs[i].exists;
+      const udata = exists ? userDocs[i].data() : {};
+      const banned = exists && udata.banned;
+      const banType = udata.banType;
+      let statusBadge = '';
+      if(banned) statusBadge = banType==='def'
+        ? '<span class="ybadge" style="color:var(--red);background:var(--red-light);">Banni définitivement</span>'
+        : '<span class="ybadge" style="color:var(--red);background:var(--red-light);">Banni</span>';
       const card = document.createElement('div');
       card.className = 'report-group' + (banned? ' banned':'');
+      if(!exists){
+        card.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div><b>${esc(g.pseudo)}</b> — ${g.items.length} signalement(s) <span class="ybadge" style="color:var(--red);background:var(--red-light);">Compte supprimé</span></div>
+          </div>
+          ${g.items.slice(0,5).map(r=> `<div class="report-line">Par ${esc(r.reporterPseudo)} · ${esc(r.reason)}${r.details? ' — '+esc(r.details):''} · ${timeAgo(r.createdAt)}</div>`).join('')}
+        `;
+        body.appendChild(card);
+        return;
+      }
       card.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div><a href="#profile/${uid}"><b>${esc(g.pseudo)}</b></a> — ${g.items.length} signalement(s) ${banned? '<span class="ybadge" style="color:var(--red);background:var(--red-light);">Banni</span>':''}</div>
-          <button class="${banned?'secondary':'danger'} small" data-uid="${uid}" data-banned="${banned?'1':'0'}">${banned? 'Débannir':'Bannir'}</button>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+          <div><a href="#profile/${uid}"><b>${esc(g.pseudo)}</b></a> — ${g.items.length} signalement(s) ${statusBadge}</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${banned
+              ? `<button class="secondary small" data-act="unban">Débannir</button>`
+              : `<button class="danger small" data-act="ban-normal">Bannir</button><button class="danger small" data-act="ban-def">Bannir déf.</button>`
+            }
+            <button class="danger small" data-act="delete-account">Supprimer le compte</button>
+          </div>
         </div>
         ${g.items.slice(0,5).map(r=> `<div class="report-line">Par ${esc(r.reporterPseudo)} · ${esc(r.reason)}${r.details? ' — '+esc(r.details):''} · ${timeAgo(r.createdAt)}</div>`).join('')}
       `;
-      card.querySelector('button').onclick = async (e)=>{
-        const isBanned = e.target.dataset.banned==='1';
-        await db.collection('users').doc(uid).update({banned: !isBanned});
-        toast(isBanned? 'Utilisateur débanni.' : 'Utilisateur banni.');
-        renderAdmin(main);
-      };
+      card.querySelectorAll('button[data-act]').forEach(btn=>{
+        btn.onclick = async ()=>{
+          const act = btn.dataset.act;
+          if(act==='unban'){
+            await db.collection('users').doc(uid).update({banned:false, banType: firebase.firestore.FieldValue.delete()});
+            toast('Utilisateur débanni.');
+          } else if(act==='ban-normal'){
+            await db.collection('users').doc(uid).update({banned:true, banType:'normal'});
+            toast('Utilisateur banni.');
+          } else if(act==='ban-def'){
+            if(!confirm('Bannir définitivement cet utilisateur ? Cette décision est irrévocable.')) return;
+            await db.collection('users').doc(uid).update({banned:true, banType:'def'});
+            toast('Utilisateur banni définitivement.');
+          } else if(act==='delete-account'){
+            if(!confirm('Supprimer définitivement le compte de '+g.pseudo+' ? Cette action est irréversible.')) return;
+            await db.collection('users').doc(uid).delete();
+            toast('Compte supprimé.');
+          }
+          renderAdmin(main);
+        };
+      });
       body.appendChild(card);
     });
   }).catch(err=>{
