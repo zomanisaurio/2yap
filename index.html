@@ -2322,9 +2322,23 @@ function renderLiveHub(main){
   .onSnapshot(snap=>{
     const list = document.getElementById('liveList');
     if(!list) return;
-    if(snap.empty){ list.innerHTML = '<div class="empty">Aucun live en cours pour le moment.</div>'; return; }
-    list.innerHTML = '';
+    const now = Date.now();
+    const rows = [];
     snap.forEach(d=>{
+      const l = d.data();
+      const createdMs = l.createdAt ? l.createdAt.toMillis() : now;
+      const pingMs = l.lastPing ? l.lastPing.toMillis() : createdMs;
+      const justCreated = (now - createdMs) < 20000; // laisse 20s au host pour envoyer son 1er battement
+      if(!justCreated && (now - pingMs) > 25000){
+        // le host a disparu sans terminer le live proprement -> on nettoie
+        deleteLiveCompletely(d.id);
+        return;
+      }
+      rows.push(d);
+    });
+    if(rows.length===0){ list.innerHTML = '<div class="empty">Aucun live en cours pour le moment.</div>'; return; }
+    list.innerHTML = '';
+    rows.forEach(d=>{
       const l = d.data();
       const row = document.createElement('div');
       row.className = 'live-row';
@@ -2342,15 +2356,29 @@ function renderLiveHub(main){
     const list = document.getElementById('liveList');
     if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
   });
-unsubscribers.push(liveUn);
+  unsubscribers.push(liveUn);
+}
 
-// show accurate viewer count from viewers subcollection
-const viewersUn = db.collection('lives').doc(code).collection('viewers')
-  .onSnapshot(snap=>{
-    const c = document.getElementById('liveViewerCount');
-    if(c) c.textContent = snap.size;
-  }, ()=>{});
-unsubscribers.push(viewersUn);
+// Supprime entièrement un live (doc + sous-collections) - utilisé pour les lives terminés ou fantômes
+async function deleteCollectionDocs(ref){
+  const snap = await ref.get();
+  if(snap.empty) return [];
+  const batch = db.batch();
+  snap.forEach(d=> batch.delete(d.ref));
+  await batch.commit();
+  return snap.docs;
+}
+async function deleteLiveCompletely(code){
+  try{
+    const liveRef = db.collection('lives').doc(code);
+    const viewerDocs = await deleteCollectionDocs(liveRef.collection('viewers'));
+    for(const vd of viewerDocs){
+      await deleteCollectionDocs(vd.ref.collection('hostCandidates'));
+      await deleteCollectionDocs(vd.ref.collection('viewerCandidates'));
+    }
+    await deleteCollectionDocs(liveRef.collection('chat'));
+    await liveRef.delete();
+  }catch(e){ /* best effort, silencieux */ }
 }
 
 async function startLive(){
@@ -2365,6 +2393,7 @@ async function startLive(){
     hostPseudo: currentUser.pseudo,
     hostAvatar: currentUser.avatar||'',
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    lastPing: firebase.firestore.FieldValue.serverTimestamp(),
     active: true,
     viewerCount: 0
   });
@@ -2438,16 +2467,25 @@ function renderLiveRoom(main, codeRaw){
     document.getElementById('liveChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter') sendLiveChat(); });
 
     const liveDocUn = db.collection('lives').doc(code).onSnapshot(d=>{
-      if(!d.exists) return;
+      if(!d.exists){
+        toast('Ce live est terminé.');
+        location.hash = '#live';
+        return;
+      }
       const data = d.data();
-      const c = document.getElementById('liveViewerCount');
-      if(c) c.textContent = data.viewerCount||0;
       if(data.active===false){
         toast('Ce live est terminé.');
         location.hash = '#live';
       }
     });
     unsubscribers.push(liveDocUn);
+
+    // compteur de viewers précis en temps réel, basé directement sur la sous-collection
+    const viewerCountUn = db.collection('lives').doc(code).collection('viewers').onSnapshot(snap=>{
+      const c = document.getElementById('liveViewerCount');
+      if(c) c.textContent = snap.size;
+    }, ()=>{});
+    unsubscribers.push(viewerCountUn);
 
     function copyCode(){
       navigator.clipboard?.writeText(code).then(()=> toast('Code copié : '+code)).catch(()=> toast('Code : '+code));
@@ -2468,17 +2506,17 @@ function renderLiveRoom(main, codeRaw){
     }
 
     async function endLive(){
-      await db.collection('lives').doc(code).update({active:false});
+      if(heartbeatInterval) clearInterval(heartbeatInterval);
       if(currentUser.liveCode===code){
         await db.collection('users').doc(currentUser.uid).update({liveActive:false});
         currentUser.liveActive = false;
       }
+      await deleteLiveCompletely(code);
       location.hash = '#live';
     }
 
     async function leaveLive(){
       await db.collection('lives').doc(code).collection('viewers').doc(currentUser.uid).delete().catch(()=>{});
-      await db.collection('lives').doc(code).update({viewerCount: firebase.firestore.FieldValue.increment(-1)}).catch(()=>{});
       location.hash = '#live';
     }
 
@@ -2509,15 +2547,26 @@ function renderLiveRoom(main, codeRaw){
     }
     renderControls();
 
+    let heartbeatInterval = null;
     let cleaned = false;
     function cleanup(){
       if(cleaned) return; cleaned = true;
       Object.values(peers).forEach(pc=>{ try{ pc.close(); }catch(e){} });
       if(localStream) localStream.getTracks().forEach(t=>t.stop());
+      if(heartbeatInterval) clearInterval(heartbeatInterval);
+      if(!isHost){
+        // on quitte la room (navigation dans l'app) -> on se retire des viewers, même sans clic explicite
+        db.collection('lives').doc(code).collection('viewers').doc(currentUser.uid).delete().catch(()=>{});
+      }
     }
     unsubscribers.push(cleanup);
+    window.addEventListener('pagehide', cleanup);
+    unsubscribers.push(()=> window.removeEventListener('pagehide', cleanup));
 
     if(isHost){
+      heartbeatInterval = setInterval(()=>{
+        db.collection('lives').doc(code).update({lastPing: firebase.firestore.FieldValue.serverTimestamp()}).catch(()=>{});
+      }, 15000);
       navigator.mediaDevices.getUserMedia({video:true, audio:true}).then(stream=>{
         localStream = stream;
         videoEl.srcObject = stream;
@@ -2556,6 +2605,8 @@ function renderLiveRoom(main, codeRaw){
           if(ch.type==='added') setupPeerForViewer(ch.doc.id);
           if(ch.type==='removed' && peers[ch.doc.id]){ peers[ch.doc.id].close(); delete peers[ch.doc.id]; }
         });
+        // le host est la seule source qui écrit viewerCount -> évite les conflits d'écriture concurrents
+        db.collection('lives').doc(code).update({viewerCount: snap.size}).catch(()=>{});
       });
       unsubscribers.push(viewersUn);
 
@@ -2567,8 +2618,7 @@ function renderLiveRoom(main, codeRaw){
       pc.onicecandidate = e=>{
         if(e.candidate) viewerRef.collection('viewerCandidates').add(e.candidate.toJSON());
       };
-      viewerRef.set({uid: currentUser.uid, pseudo: currentUser.pseudo, joinedAt: firebase.firestore.FieldValue.serverTimestamp()})
-        .then(()=> db.collection('lives').doc(code).update({viewerCount: firebase.firestore.FieldValue.increment(1)}));
+      viewerRef.set({uid: currentUser.uid, pseudo: currentUser.pseudo, joinedAt: firebase.firestore.FieldValue.serverTimestamp()});
 
       const un1 = viewerRef.onSnapshot(snap=>{
         const data = snap.data();
