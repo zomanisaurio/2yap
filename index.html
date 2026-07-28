@@ -2318,7 +2318,8 @@ function renderLiveHub(main){
     if(e.key==='Enter') document.getElementById('joinCodeBtn').click();
   });
 
-  db.collection('lives').where('active','==',true).orderBy('createdAt','desc').limit(30).get().then(snap=>{
+  const liveUn = db.collection('lives').where('active','==',true).orderBy('createdAt','desc').limit(30)
+  .onSnapshot(snap=>{
     const list = document.getElementById('liveList');
     if(!list) return;
     if(snap.empty){ list.innerHTML = '<div class="empty">Aucun live en cours pour le moment.</div>'; return; }
@@ -2337,10 +2338,19 @@ function renderLiveHub(main){
       row.onclick = ()=> location.hash = '#live/'+d.id;
       list.appendChild(row);
     });
-  }).catch(err=>{
+  }, err=>{
     const list = document.getElementById('liveList');
     if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
   });
+unsubscribers.push(liveUn);
+
+// show accurate viewer count from viewers subcollection
+const viewersUn = db.collection('lives').doc(code).collection('viewers')
+  .onSnapshot(snap=>{
+    const c = document.getElementById('liveViewerCount');
+    if(c) c.textContent = snap.size;
+  }, ()=>{});
+unsubscribers.push(viewersUn);
 }
 
 async function startLive(){
