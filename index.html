@@ -324,7 +324,8 @@
   .msg{max-width:78%; margin-bottom:7px; padding:8px 12px; border-radius:14px; font-size:14px; word-break:break-word;}
   .msg.me{background:var(--primary); color:#fff; margin-left:auto; border-bottom-right-radius:4px;}
   .msg.them{background:#fff; border:1px solid var(--border); border-bottom-left-radius:4px;}
-  #chatInputRow{display:flex; gap:8px; margin-top:8px;}
+  #chatInputRow, #liveChatInputRow{display:flex; gap:8px; margin-top:8px;}
+  #liveChatInputRow input{flex:1;}
   #chatInputRow input{flex:1;}
 
   /* LIVE */
@@ -432,6 +433,7 @@
     <a class="navlink" data-nav href="#people"><span class="ic">👥</span> Personnes</a>
     <a class="navlink" data-nav href="#create-community"><span class="ic">➕</span> Créer y/communauté</a>
     <a class="navlink" data-nav href="#gif-packs"><span class="ic">🎞️</span> Packs GIF</a>
+    <a class="navlink" data-nav href="#leaderboard"><span class="ic">🏆</span> Classement Yappers</a>
     <a class="navlink" data-nav href="#messages"><span class="ic">✉️</span> Messages</a>
     <a class="navlink" id="myProfileLink" data-nav href="#profile"><span class="ic">👤</span> Mon profil</a>
     <a class="navlink hidden" id="adminLink" data-nav href="#admin"><span class="ic">🛡️</span> Admin</a>
@@ -534,6 +536,36 @@ const ADMIN_EMAILS = ['amanivoyou23@gmail.com','zomanifrance@gmail.com'];
 function isAdmin(){ return !!(currentUser && ADMIN_EMAILS.includes((currentUser.email||'').toLowerCase())); }
 const REPORT_EMAIL_TARGET = 'zomanifrance@gmail.com';
 const BAN_THRESHOLD = 5;
+
+/* ---------------- YAPPERS (token / réputation) ---------------- */
+const YAPPER_TIERS = [
+  {min:0, name:'Débutant'},
+  {min:100, name:'Confirmé — Lives débloqués'},
+  {min:300, name:'Populaire — Fond GIF + avatar animé'},
+  {min:600, name:'En vedette — Toi et ta commu mis en avant'},
+  {min:1000, name:'Légende — Grande mise en page + bannière GIF pour ta commu'},
+];
+function yapperTier(count){
+  count = count||0;
+  let tier = YAPPER_TIERS[0];
+  for(const t of YAPPER_TIERS){ if(count>=t.min) tier = t; }
+  return tier;
+}
+function yapperTierLevel(count){
+  count = count||0;
+  let lvl = 0;
+  YAPPER_TIERS.forEach((t,i)=>{ if(count>=t.min) lvl = i; });
+  return lvl;
+}
+async function grantYappers(uid, amount){
+  if(!uid) return;
+  try{
+    await db.collection('users').doc(uid).update({
+      yappers: firebase.firestore.FieldValue.increment(amount)
+    });
+    if(uid===currentUser.uid) currentUser.yappers = (currentUser.yappers||0) + amount;
+  }catch(e){ console.warn('grantYappers', e); }
+}
 let unsubscribers = [];
 let userDocUnsub = null;
 let scrollBatchSize = 20;
@@ -1040,7 +1072,8 @@ document.getElementById('signupBtn').onclick = async ()=>{
   try{
     const cred = await auth.createUserWithEmailAndPassword(email, pass);
     await db.collection('users').doc(cred.user.uid).set({
-      pseudo, email, bio:'', avatar:'', following:[], followers:[],
+      pseudo, email, bio:'', avatar:'', following:[], followers:[], yappers:0,
+      profileBgColor:'', profileBgUrl:'',
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }catch(e){ msgEl.textContent = translateErr(e); }
@@ -1137,6 +1170,7 @@ function router(){
   else if(route==='admin'){ renderAdmin(main); }
   else if(route==='people'){ renderPeople(main); }
   else if(route==='gif-packs'){ renderGifPacks(main); }
+  else if(route==='leaderboard'){ renderLeaderboard(main); }
   else { renderHome(main); }
 }
 
@@ -1427,6 +1461,31 @@ https://.../deux.gif" style="min-height:100px;"></textarea></div>
   });
 }
 
+/* ---------------- LEADERBOARD ---------------- */
+function renderLeaderboard(main){
+  main.innerHTML = '<div class="panel"><div class="panel-head">🏆 Classement des Yappers</div><div class="panel-body" id="leaderboardBody"><div class="empty">Chargement...</div></div></div>';
+  db.collection('users').orderBy('yappers','desc').limit(50).get().then(snap=>{
+    const body = document.getElementById('leaderboardBody');
+    if(!body) return;
+    if(snap.empty){ body.innerHTML = '<div class="empty">Personne n\'a encore de Yappers.</div>'; return; }
+    body.innerHTML = '';
+    let rank = 0;
+    snap.forEach(d=>{
+      rank++;
+      const u = d.data();
+      const row = document.createElement('div');
+      row.className = 'person-row';
+      const medal = rank===1?'🥇':rank===2?'🥈':rank===3?'🥉':('#'+rank);
+      row.innerHTML = `<b style="width:28px;">${medal}</b><img class="avatar" src="${u.avatar||fallbackAvatar()}"><div><b>${esc(u.pseudo)}</b><div class="post-meta">${esc(yapperTier(u.yappers||0).name)}</div></div><span style="margin-left:auto;font-weight:700;">🪙 ${u.yappers||0}</span>`;
+      row.onclick = ()=> location.hash = '#profile/'+d.id;
+      body.appendChild(row);
+    });
+  }).catch(err=>{
+    const body = document.getElementById('leaderboardBody');
+    if(body) body.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+  });
+}
+
 /* ---------------- PEOPLE SEARCH ---------------- */
 function renderPeople(main){
   main.innerHTML = `
@@ -1497,6 +1556,7 @@ function subscribeScrollFeed(ids){
 /* ---------------- EXPLORE ---------------- */
 function renderExplore(main, query){
   main.innerHTML = `
+    <div class="panel" id="featuredPanel"></div>
     <div class="panel">
       <div class="panel-head">Explorer les communautés</div>
       <div class="panel-body">
@@ -1504,6 +1564,22 @@ function renderExplore(main, query){
       </div>
       <div class="grid" id="exploreGrid"><div class="empty">Chargement...</div></div>
     </div>`;
+  db.collection('users').where('yappers','>=',600).orderBy('yappers','desc').limit(5).get().then(snap=>{
+    const panel = document.getElementById('featuredPanel');
+    if(!panel) return;
+    if(snap.empty){ panel.remove(); return; }
+    let html = '<div class="panel-head">✨ En vedette</div><div class="panel-body" style="display:flex;gap:10px;overflow-x:auto;">';
+    snap.forEach(d=>{
+      const u = d.data();
+      html += `<div style="text-align:center;min-width:72px;cursor:pointer;" data-uid="${d.id}">
+        <img class="avatar lg" src="${u.avatar||fallbackAvatar()}" style="margin:0 auto;">
+        <div style="font-size:11.5px;font-weight:700;margin-top:4px;">${esc(u.pseudo)}</div>
+      </div>`;
+    });
+    html += '</div>';
+    panel.innerHTML = html;
+    panel.querySelectorAll('[data-uid]').forEach(el=> el.onclick = ()=> location.hash = '#profile/'+el.dataset.uid);
+  }).catch(()=>{ document.getElementById('featuredPanel')?.remove(); });
   const un = db.collection('communities').orderBy('createdAt','desc').limit(100).onSnapshot(snap=>{
     const all = [];
     snap.forEach(d=> all.push({id:d.id, ...d.data()}) );
@@ -1639,6 +1715,7 @@ function renderCommunitySettings(main, slug){
       main.innerHTML = '<div class="panel"><div class="empty">Seul le créateur de la communauté peut modifier ses paramètres.</div></div>';
       return;
     }
+    const ownerTier = yapperTierLevel(currentUser.yappers||0);
     main.innerHTML = `
       <div class="panel">
         <div class="panel-head">Paramètres de y/${esc(c.slug)}</div>
@@ -1653,6 +1730,16 @@ function renderCommunitySettings(main, slug){
           <div class="field"><label>Thumbnail / bannière (laisse vide pour garder l'actuelle)</label>
             ${c.thumbnail? `<img src="${c.thumbnail}" style="width:100%;max-height:120px;object-fit:cover;border-radius:10px;margin-bottom:6px;">`:''}
             <input id="ecThumb" type="file" accept="image/*">
+          </div>
+          <div class="field">
+            <label>🎬 Bannière GIF (lien) ${ownerTier<4? '— débloqué à 1000 Yappers':''}</label>
+            <input id="ecBannerGif" placeholder="https://.../banniere.gif" value="${esc(c.bannerGifUrl||'')}" ${ownerTier<4?'disabled':''}>
+          </div>
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text);">
+              <input type="checkbox" id="ecLargeLayout" style="width:auto;" ${c.largeLayout?'checked':''} ${ownerTier<4?'disabled':''}>
+              Grande mise en page ${ownerTier<4? '(débloqué à 1000 Yappers)':''}
+            </label>
           </div>
           <div class="field"><label>🔗 Lien du Hub (optionnel)</label><input id="ecHub" value="${esc(c.hubUrl||'')}" placeholder="https://..."></div>
           <div class="field">
@@ -1685,14 +1772,19 @@ function renderCommunitySettings(main, slug){
         const primary = document.getElementById('ecColorPrimary').value;
         const bgc = document.getElementById('ecColorBg').value;
         const advancedCss = document.getElementById('ecCss').value;
-        await db.collection('communities').doc(slug).update({
+        const update = {
           category: document.getElementById('ecCat').value,
           description: document.getElementById('ecDesc').value.trim(),
           thumbnail: thumb,
           hubUrl: document.getElementById('ecHub').value.trim(),
           themePrimary: primary, themeBg: bgc, advancedCSS: advancedCss,
           customCSS: buildThemeCss(primary, bgc) + '\n' + advancedCss
-        });
+        };
+        if(ownerTier>=4){
+          update.bannerGifUrl = document.getElementById('ecBannerGif').value.trim();
+          update.largeLayout = document.getElementById('ecLargeLayout').checked;
+        }
+        await db.collection('communities').doc(slug).update(update);
         toast('Paramètres enregistrés.');
         location.hash = '#community/'+slug;
       }catch(err){ msg.textContent = 'Erreur : '+err.message; }
@@ -1723,8 +1815,8 @@ function renderCommunity(main, slug){
     communityTab = 'posts';
     main.innerHTML = `
       <div class="panel">
-        <div class="comm-banner" style="background-image:url('${c.thumbnail||''}')">
-          <div class="title">y/${esc(c.slug)}</div>
+        <div class="comm-banner" style="background-image:url('${esc(c.bannerGifUrl||c.thumbnail||'')}'); ${c.largeLayout?'height:220px;':''}">
+          <div class="title" style="${c.largeLayout?'font-size:26px;':''}">y/${esc(c.slug)}</div>
         </div>
         <div class="comm-info">
           <div>
@@ -1847,7 +1939,9 @@ function toggleNewPost(slug, c){
       likes:[], dislikes:[],
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    area.innerHTML=''; playSound('publish'); toast('Post publié !');
+    const yGain = 8 + Math.floor(Math.random()*5); // ~10 Yappers, variable
+    grantYappers(currentUser.uid, yGain);
+    area.innerHTML=''; playSound('publish'); toast('Post publié ! +'+yGain+' Yappers 🪙');
   };
 }
 
@@ -2119,29 +2213,54 @@ function renderProfile(main, uid){
     const iFollow = (u.followers||[]).includes(currentUser.uid);
     const followsMe = (u.following||[]).includes(currentUser.uid);
     const areFriends = iFollow && followsMe;
+    const yappers = u.yappers||0;
+    const tier = yapperTier(yappers);
+    const tierLevel = yapperTierLevel(yappers);
+    const nextTier = YAPPER_TIERS[tierLevel+1];
+    const bannerStyle = u.profileBgUrl
+      ? `background-image:url('${esc(u.profileBgUrl)}'); background-size:cover; background-position:center;`
+      : (u.profileBgColor? `background:${esc(u.profileBgColor)};` : '');
     main.innerHTML = `
       <div class="panel">
-        <div class="profile-head">
+        <div class="profile-head" style="${bannerStyle}">
           <img class="avatar lg" src="${u.avatar||fallbackAvatar()}">
           <div>
-            <div style="font-size:17px;font-weight:bold;color:var(--blue-dark);">${esc(u.pseudo)}</div>
+            <div style="font-size:17px;font-weight:bold;color:var(--text);">${esc(u.pseudo)}</div>
             <div class="post-meta">${esc(u.bio||'')}</div>
             <div class="profile-stats">
               <span><b>${(u.followers||[]).length}</b> abonnés</span>
               <span><b>${(u.following||[]).length}</b> abonnements</span>
               ${areFriends? '<span class="ybadge">Amis</span>':''}
+              <span class="ybadge">🪙 ${yappers} Yappers</span>
             </div>
           </div>
         </div>
-        <div class="panel-body" id="profileActions"></div>
+        <div class="panel-body" style="padding-top:0;">
+          <div class="post-meta">${esc(tier.name)}${nextTier? ` · encore ${nextTier.min-yappers} Yappers avant "${esc(nextTier.name)}"`:' · palier maximum atteint 🏆'}</div>
+        </div>
+        <div class="panel-body" id="profileActions" style="padding-top:0;"></div>
       </div>
       ${isMe? `
       <div class="panel">
         <div class="panel-head">Modifier mon profil</div>
         <div class="panel-body">
           <div class="field"><label>Bio</label><textarea id="editBio">${esc(u.bio||'')}</textarea></div>
-          <div class="field"><label>Avatar</label><input id="editAvatar" type="file" accept="image/*"></div>
+          <div class="field"><label>Avatar (GIF animé possible dès 300 Yappers)</label><input id="editAvatar" type="file" accept="image/*"></div>
           <button id="saveProfileBtn">Enregistrer</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">🎨 Personnalisation du profil</div>
+        <div class="panel-body">
+          <div class="field">
+            <label>Fond de profil — couleur ${tierLevel<1? '(débloqué à 100 Yappers)':''}</label>
+            <input type="color" id="editBgColor" value="${u.profileBgColor||'#4F46E5'}" ${tierLevel<1?'disabled':''} style="width:60px;height:38px;">
+          </div>
+          <div class="field">
+            <label>Fond de profil — image/GIF (lien) ${tierLevel<2? '(débloqué à 300 Yappers)':''}</label>
+            <input id="editBgUrl" placeholder="https://.../fond.gif" value="${esc(u.profileBgUrl||'')}" ${tierLevel<2?'disabled':''}>
+          </div>
+          <button id="saveCustomBtn">Enregistrer la personnalisation</button>
         </div>
       </div>` : ''}
       <div class="panel">
@@ -2163,6 +2282,7 @@ function renderProfile(main, uid){
           await myRef.update({following: firebase.firestore.FieldValue.arrayUnion(uid)});
           await theirRef.update({followers: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)});
           createNotification(uid, currentUser.pseudo+' s\'est abonné(e) à toi.', '#profile/'+currentUser.uid);
+          grantYappers(uid, 25);
         }
         const doc2 = await myRef.get(); currentUser = {uid:currentUser.uid, ...doc2.data()};
         renderProfile(main, uid);
@@ -2185,11 +2305,25 @@ function renderProfile(main, uid){
       const bio = document.getElementById('editBio').value.trim();
       let avatar = currentUser.avatar||'';
       const f = document.getElementById('editAvatar').files[0];
-      if(f) avatar = await resizeImageBase64(f, 200, 0.75);
+      if(f){
+        if(f.type==='image/gif' && tierLevel>=2){
+          avatar = await fileToBase64(f); // pas de passage par canvas: préserve l'animation du GIF
+        } else {
+          avatar = await resizeImageBase64(f, 200, 0.75);
+        }
+      }
       await db.collection('users').doc(uid).update({bio, avatar});
       currentUser.bio = bio; currentUser.avatar = avatar;
       updateTopbarAvatar();
       toast('Profil mis à jour.');
+      renderProfile(main, uid);
+    });
+    document.getElementById('saveCustomBtn')?.addEventListener('click', async ()=>{
+      const update = {};
+      if(tierLevel>=1) update.profileBgColor = document.getElementById('editBgColor').value;
+      if(tierLevel>=2) update.profileBgUrl = document.getElementById('editBgUrl').value.trim();
+      await db.collection('users').doc(uid).update(update);
+      toast('Personnalisation enregistrée.');
       renderProfile(main, uid);
     });
     db.collection('posts').where('authorUid','==',uid).get().then(snap=>{
@@ -2293,11 +2427,15 @@ function genLiveCode(){
 }
 
 function renderLiveHub(main){
+  const myYappers = currentUser.yappers||0;
+  const canLive = myYappers>=100;
   main.innerHTML = `
     <div class="panel">
       <div class="panel-head">🔴 Live</div>
       <div class="panel-body">
-        <button id="startLiveBtn">Démarrer un live</button>
+        ${canLive
+          ? '<button id="startLiveBtn">Démarrer un live</button>'
+          : `<button disabled title="Débloqué à 100 Yappers">Démarrer un live</button><div class="post-meta" style="margin-top:6px;">🪙 ${myYappers}/100 Yappers — encore ${100-myYappers} pour débloquer les lives.</div>`}
         <div style="display:flex; gap:8px; margin-top:12px;">
           <input id="joinCodeInput" placeholder="Code du live (ex: AB12CD)" style="text-transform:uppercase;">
           <button id="joinCodeBtn" class="secondary">Rejoindre</button>
@@ -2309,7 +2447,7 @@ function renderLiveHub(main){
       <div id="liveList"><div class="empty">Chargement...</div></div>
     </div>`;
 
-  document.getElementById('startLiveBtn').onclick = startLive;
+  document.getElementById('startLiveBtn')?.addEventListener('click', startLive);
   document.getElementById('joinCodeBtn').onclick = ()=>{
     const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
     if(code) location.hash = '#live/'+code;
@@ -2322,23 +2460,9 @@ function renderLiveHub(main){
   .onSnapshot(snap=>{
     const list = document.getElementById('liveList');
     if(!list) return;
-    const now = Date.now();
-    const rows = [];
-    snap.forEach(d=>{
-      const l = d.data();
-      const createdMs = l.createdAt ? l.createdAt.toMillis() : now;
-      const pingMs = l.lastPing ? l.lastPing.toMillis() : createdMs;
-      const justCreated = (now - createdMs) < 20000; // laisse 20s au host pour envoyer son 1er battement
-      if(!justCreated && (now - pingMs) > 25000){
-        // le host a disparu sans terminer le live proprement -> on nettoie
-        deleteLiveCompletely(d.id);
-        return;
-      }
-      rows.push(d);
-    });
-    if(rows.length===0){ list.innerHTML = '<div class="empty">Aucun live en cours pour le moment.</div>'; return; }
+    if(snap.empty){ list.innerHTML = '<div class="empty">Aucun live en cours pour le moment.</div>'; return; }
     list.innerHTML = '';
-    rows.forEach(d=>{
+    snap.forEach(d=>{
       const l = d.data();
       const row = document.createElement('div');
       row.className = 'live-row';
@@ -2356,32 +2480,11 @@ function renderLiveHub(main){
     const list = document.getElementById('liveList');
     if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
   });
-  unsubscribers.push(liveUn);
-}
-
-// Supprime entièrement un live (doc + sous-collections) - utilisé pour les lives terminés ou fantômes
-async function deleteCollectionDocs(ref){
-  const snap = await ref.get();
-  if(snap.empty) return [];
-  const batch = db.batch();
-  snap.forEach(d=> batch.delete(d.ref));
-  await batch.commit();
-  return snap.docs;
-}
-async function deleteLiveCompletely(code){
-  try{
-    const liveRef = db.collection('lives').doc(code);
-    const viewerDocs = await deleteCollectionDocs(liveRef.collection('viewers'));
-    for(const vd of viewerDocs){
-      await deleteCollectionDocs(vd.ref.collection('hostCandidates'));
-      await deleteCollectionDocs(vd.ref.collection('viewerCandidates'));
-    }
-    await deleteCollectionDocs(liveRef.collection('chat'));
-    await liveRef.delete();
-  }catch(e){ /* best effort, silencieux */ }
+unsubscribers.push(liveUn);
 }
 
 async function startLive(){
+  if((currentUser.yappers||0) < 100){ toast('Il faut 100 Yappers pour démarrer un live.'); return; }
   let code = genLiveCode();
   for(let i=0;i<5;i++){
     const existing = await db.collection('lives').doc(code).get();
@@ -2393,7 +2496,6 @@ async function startLive(){
     hostPseudo: currentUser.pseudo,
     hostAvatar: currentUser.avatar||'',
     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    lastPing: firebase.firestore.FieldValue.serverTimestamp(),
     active: true,
     viewerCount: 0
   });
@@ -2424,7 +2526,7 @@ function renderLiveRoom(main, codeRaw){
           </div>
           <div id="liveControls" style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;"></div>
           <div id="liveChatBox"></div>
-          <div id="chatInputRow">
+          <div id="liveChatInputRow">
             <input id="liveChatInput" placeholder="Écris un message...">
             <button id="liveChatSendBtn">Envoyer</button>
           </div>
@@ -2467,25 +2569,16 @@ function renderLiveRoom(main, codeRaw){
     document.getElementById('liveChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter') sendLiveChat(); });
 
     const liveDocUn = db.collection('lives').doc(code).onSnapshot(d=>{
-      if(!d.exists){
-        toast('Ce live est terminé.');
-        location.hash = '#live';
-        return;
-      }
+      if(!d.exists) return;
       const data = d.data();
+      const c = document.getElementById('liveViewerCount');
+      if(c) c.textContent = data.viewerCount||0;
       if(data.active===false){
         toast('Ce live est terminé.');
         location.hash = '#live';
       }
     });
     unsubscribers.push(liveDocUn);
-
-    // compteur de viewers précis en temps réel, basé directement sur la sous-collection
-    const viewerCountUn = db.collection('lives').doc(code).collection('viewers').onSnapshot(snap=>{
-      const c = document.getElementById('liveViewerCount');
-      if(c) c.textContent = snap.size;
-    }, ()=>{});
-    unsubscribers.push(viewerCountUn);
 
     function copyCode(){
       navigator.clipboard?.writeText(code).then(()=> toast('Code copié : '+code)).catch(()=> toast('Code : '+code));
@@ -2506,17 +2599,17 @@ function renderLiveRoom(main, codeRaw){
     }
 
     async function endLive(){
-      if(heartbeatInterval) clearInterval(heartbeatInterval);
+      await db.collection('lives').doc(code).update({active:false});
       if(currentUser.liveCode===code){
         await db.collection('users').doc(currentUser.uid).update({liveActive:false});
         currentUser.liveActive = false;
       }
-      await deleteLiveCompletely(code);
       location.hash = '#live';
     }
 
     async function leaveLive(){
       await db.collection('lives').doc(code).collection('viewers').doc(currentUser.uid).delete().catch(()=>{});
+      await db.collection('lives').doc(code).update({viewerCount: firebase.firestore.FieldValue.increment(-1)}).catch(()=>{});
       location.hash = '#live';
     }
 
@@ -2547,26 +2640,15 @@ function renderLiveRoom(main, codeRaw){
     }
     renderControls();
 
-    let heartbeatInterval = null;
     let cleaned = false;
     function cleanup(){
       if(cleaned) return; cleaned = true;
       Object.values(peers).forEach(pc=>{ try{ pc.close(); }catch(e){} });
       if(localStream) localStream.getTracks().forEach(t=>t.stop());
-      if(heartbeatInterval) clearInterval(heartbeatInterval);
-      if(!isHost){
-        // on quitte la room (navigation dans l'app) -> on se retire des viewers, même sans clic explicite
-        db.collection('lives').doc(code).collection('viewers').doc(currentUser.uid).delete().catch(()=>{});
-      }
     }
     unsubscribers.push(cleanup);
-    window.addEventListener('pagehide', cleanup);
-    unsubscribers.push(()=> window.removeEventListener('pagehide', cleanup));
 
     if(isHost){
-      heartbeatInterval = setInterval(()=>{
-        db.collection('lives').doc(code).update({lastPing: firebase.firestore.FieldValue.serverTimestamp()}).catch(()=>{});
-      }, 15000);
       navigator.mediaDevices.getUserMedia({video:true, audio:true}).then(stream=>{
         localStream = stream;
         videoEl.srcObject = stream;
@@ -2605,8 +2687,6 @@ function renderLiveRoom(main, codeRaw){
           if(ch.type==='added') setupPeerForViewer(ch.doc.id);
           if(ch.type==='removed' && peers[ch.doc.id]){ peers[ch.doc.id].close(); delete peers[ch.doc.id]; }
         });
-        // le host est la seule source qui écrit viewerCount -> évite les conflits d'écriture concurrents
-        db.collection('lives').doc(code).update({viewerCount: snap.size}).catch(()=>{});
       });
       unsubscribers.push(viewersUn);
 
@@ -2618,7 +2698,8 @@ function renderLiveRoom(main, codeRaw){
       pc.onicecandidate = e=>{
         if(e.candidate) viewerRef.collection('viewerCandidates').add(e.candidate.toJSON());
       };
-      viewerRef.set({uid: currentUser.uid, pseudo: currentUser.pseudo, joinedAt: firebase.firestore.FieldValue.serverTimestamp()});
+      viewerRef.set({uid: currentUser.uid, pseudo: currentUser.pseudo, joinedAt: firebase.firestore.FieldValue.serverTimestamp()})
+        .then(()=> db.collection('lives').doc(code).update({viewerCount: firebase.firestore.FieldValue.increment(1)}));
 
       const un1 = viewerRef.onSnapshot(snap=>{
         const data = snap.data();
