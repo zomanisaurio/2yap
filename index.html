@@ -534,6 +534,9 @@ const db = firebase.firestore();
 let currentUser = null; // {uid, pseudo, email, bio, avatar, following, followers}
 const ADMIN_EMAILS = ['amanivoyou23@gmail.com','zomanifrance@gmail.com'];
 function isAdmin(){ return !!(currentUser && ADMIN_EMAILS.includes((currentUser.email||'').toLowerCase())); }
+function isAdminEmail(email){ return ADMIN_EMAILS.includes((email||'').toLowerCase()); }
+// Les comptes admin ont des Yappers illimités (tous les paliers débloqués, jamais bloqués).
+function effectiveYappers(u){ return (u && isAdminEmail(u.email)) ? Infinity : ((u&&u.yappers)||0); }
 const REPORT_EMAIL_TARGET = 'zomanifrance@gmail.com';
 const BAN_THRESHOLD = 5;
 
@@ -1476,7 +1479,8 @@ function renderLeaderboard(main){
       const row = document.createElement('div');
       row.className = 'person-row';
       const medal = rank===1?'🥇':rank===2?'🥈':rank===3?'🥉':('#'+rank);
-      row.innerHTML = `<b style="width:28px;">${medal}</b><img class="avatar" src="${u.avatar||fallbackAvatar()}"><div><b>${esc(u.pseudo)}</b><div class="post-meta">${esc(yapperTier(u.yappers||0).name)}</div></div><span style="margin-left:auto;font-weight:700;">🪙 ${u.yappers||0}</span>`;
+      const admin = isAdminEmail(u.email);
+      row.innerHTML = `<b style="width:28px;">${medal}</b><img class="avatar" src="${u.avatar||fallbackAvatar()}"><div><b>${esc(u.pseudo)}</b><div class="post-meta">${esc(yapperTier(effectiveYappers(u)).name)}</div></div><span style="margin-left:auto;font-weight:700;">🪙 ${admin? '∞' : (u.yappers||0)}</span>`;
       row.onclick = ()=> location.hash = '#profile/'+d.id;
       body.appendChild(row);
     });
@@ -1715,7 +1719,7 @@ function renderCommunitySettings(main, slug){
       main.innerHTML = '<div class="panel"><div class="empty">Seul le créateur de la communauté peut modifier ses paramètres.</div></div>';
       return;
     }
-    const ownerTier = yapperTierLevel(currentUser.yappers||0);
+    const ownerTier = yapperTierLevel(effectiveYappers(currentUser));
     main.innerHTML = `
       <div class="panel">
         <div class="panel-head">Paramètres de y/${esc(c.slug)}</div>
@@ -2213,10 +2217,12 @@ function renderProfile(main, uid){
     const iFollow = (u.followers||[]).includes(currentUser.uid);
     const followsMe = (u.following||[]).includes(currentUser.uid);
     const areFriends = iFollow && followsMe;
-    const yappers = u.yappers||0;
+    const rawYappers = u.yappers||0;
+    const yappers = effectiveYappers(u); // Infinity pour les admins -> tous les paliers débloqués
     const tier = yapperTier(yappers);
     const tierLevel = yapperTierLevel(yappers);
     const nextTier = YAPPER_TIERS[tierLevel+1];
+    const yappersDisplay = isAdminEmail(u.email) ? '∞' : rawYappers;
     const bannerStyle = u.profileBgUrl
       ? `background-image:url('${esc(u.profileBgUrl)}'); background-size:cover; background-position:center;`
       : (u.profileBgColor? `background:${esc(u.profileBgColor)};` : '');
@@ -2231,7 +2237,7 @@ function renderProfile(main, uid){
               <span><b>${(u.followers||[]).length}</b> abonnés</span>
               <span><b>${(u.following||[]).length}</b> abonnements</span>
               ${areFriends? '<span class="ybadge">Amis</span>':''}
-              <span class="ybadge">🪙 ${yappers} Yappers</span>
+              <span class="ybadge">🪙 ${yappersDisplay} Yappers</span>
             </div>
           </div>
         </div>
@@ -2427,7 +2433,7 @@ function genLiveCode(){
 }
 
 function renderLiveHub(main){
-  const myYappers = currentUser.yappers||0;
+  const myYappers = effectiveYappers(currentUser);
   const canLive = myYappers>=100;
   main.innerHTML = `
     <div class="panel">
@@ -2484,7 +2490,7 @@ unsubscribers.push(liveUn);
 }
 
 async function startLive(){
-  if((currentUser.yappers||0) < 100){ toast('Il faut 100 Yappers pour démarrer un live.'); return; }
+  if(effectiveYappers(currentUser) < 100){ toast('Il faut 100 Yappers pour démarrer un live.'); return; }
   let code = genLiveCode();
   for(let i=0;i<5;i++){
     const existing = await db.collection('lives').doc(code).get();
