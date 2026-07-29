@@ -378,18 +378,33 @@
   #hubFrameWrap iframe{width:100%; height:100%; border:none; background:#000;}
   .hub-fallback{padding:30px 16px; text-align:center;}
 
-  /* GIF PICKER */
+  /* GIF PICKER (Giphy) */
   #gifPickerPanel{
-    display:none; max-height:180px; overflow-y:auto; padding:8px 14px; border-top:1px solid var(--border);
-    grid-template-columns:repeat(auto-fill, minmax(64px,1fr)); gap:6px;
+    display:none; max-height:260px; padding:8px 14px; border-top:1px solid var(--border);
+    flex-direction:column; gap:8px;
   }
-  #gifPickerPanel.open{display:grid;}
-  #gifPickerPanel img{width:100%; height:56px; object-fit:cover; border-radius:6px; cursor:pointer; border:1px solid var(--border);}
-  #gifPickerPanel img:hover{outline:2px solid var(--primary);}
-  .gif-pack-card{border:1px solid var(--border); border-radius:12px; padding:10px; margin-bottom:10px;}
+  #gifPickerPanel.open{display:flex;}
+  .gif-search-grid{
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(64px,1fr)); gap:6px;
+    overflow-y:auto; max-height:200px;
+  }
+  .gif-search-grid img{width:100%; height:56px; object-fit:cover; border-radius:6px; cursor:pointer; border:1px solid var(--border);}
+  .gif-search-grid img:hover{outline:2px solid var(--primary);}
   .gif-pack-thumbs{display:grid; grid-template-columns:repeat(auto-fill, minmax(56px,1fr)); gap:5px; margin-top:6px;}
   .gif-pack-thumbs img{width:100%; height:48px; object-fit:cover; border-radius:5px;}
   .comment-gif{max-width:160px; border-radius:8px; margin-top:4px; display:block;}
+
+  /* TUTORIEL D'ACCUEIL */
+  #tutorialOverlay{position:fixed; inset:0; background:rgba(20,22,35,0.55); z-index:298; display:none; align-items:center; justify-content:center; padding:16px;}
+  #tutorialOverlay.open{display:flex;}
+  #tutorialModal{background:var(--panel); border-radius:16px; max-width:380px; width:100%; padding:26px 22px; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.25);}
+  #tutorialModal .tut-emoji{font-size:44px; margin-bottom:10px;}
+  #tutorialModal h3{margin:0 0 8px; color:var(--text);}
+  #tutorialModal p{color:var(--text-mute); font-size:14px; line-height:1.5; margin:0 0 18px;}
+  #tutorialModal .tut-dots{display:flex; gap:6px; justify-content:center; margin-bottom:16px;}
+  #tutorialModal .tut-dot{width:7px; height:7px; border-radius:50%; background:var(--border);}
+  #tutorialModal .tut-dot.on{background:var(--primary);}
+  #tutorialModal .tut-actions{display:flex; gap:8px; justify-content:space-between;}
 
   /* COMMENT LIKES + REPLIES */
   .comment-item{flex-direction:column; align-items:stretch;}
@@ -546,6 +561,23 @@ function isAdminEmail(email){ return ADMIN_EMAILS.includes((email||'').toLowerCa
 // Les comptes admin ont des Yappers illimités (tous les paliers débloqués, jamais bloqués).
 function effectiveYappers(u){ return (u && isAdminEmail(u.email)) ? Infinity : ((u&&u.yappers)||0); }
 const REPORT_EMAIL_TARGET = 'zomanifrance@gmail.com';
+// Clé publique de démo Giphy (limitée en débit). Remplace-la par ta propre clé gratuite
+// obtenue sur https://developers.giphy.com pour un usage en production.
+const GIPHY_API_KEY = 'dc6zaTOxFJmzC';
+async function giphySearch(query){
+  const url = query
+    ? `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(query)}&limit=24&rating=pg-13&lang=fr`
+    : `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`;
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('Giphy indisponible ('+res.status+')');
+  const data = await res.json();
+  return (data.data||[]).map(g=>({
+    id: g.id,
+    preview: (g.images.fixed_height_small||g.images.fixed_height||{}).url,
+    full: (g.images.fixed_height||g.images.original||{}).url,
+    title: g.title||''
+  }));
+}
 const BAN_THRESHOLD = 5;
 
 /* ---------------- YAPPERS (token / réputation) ---------------- */
@@ -1014,24 +1046,57 @@ async function sendCommentGif(url){
   evaluateBadges(currentUser.uid);
   document.getElementById('gifPickerPanel').classList.remove('open');
 }
-document.getElementById('gifPickerToggleBtn').onclick = async ()=>{
+let gifSearchDebounce = null;
+function renderGifSearchUI(panel, onPick){
+  panel.innerHTML = `
+    <div style="display:flex; gap:6px;">
+      <input type="text" id="gifSearchInput" placeholder="Rechercher un GIF (Giphy)..." style="flex:1;">
+      <button class="secondary small" id="gifFavTabBtn" type="button">❤️ Favoris</button>
+    </div>
+    <div class="gif-search-grid" id="gifSearchResults"><div class="empty">Chargement des GIFs tendance...</div></div>
+  `;
+  const resultsEl = panel.querySelector('#gifSearchResults');
+  let showingFavs = false;
+  const runSearch = async (q)=>{
+    showingFavs = false;
+    resultsEl.innerHTML = '<div class="empty">Recherche...</div>';
+    try{
+      const gifs = await giphySearch(q);
+      if(gifs.length===0){ resultsEl.innerHTML = '<div class="empty">Aucun GIF trouvé.</div>'; return; }
+      resultsEl.innerHTML = '';
+      gifs.forEach(g=>{
+        const img = document.createElement('img');
+        img.src = g.preview; img.loading = 'lazy'; img.title = g.title;
+        img.onclick = ()=> onPick(g.full);
+        resultsEl.appendChild(img);
+      });
+    }catch(e){ resultsEl.innerHTML = '<div class="empty">Erreur Giphy : '+esc(e.message)+'</div>'; }
+  };
+  const showFavs = ()=>{
+    showingFavs = true;
+    const favs = currentUser.gifFavorites||[];
+    if(favs.length===0){ resultsEl.innerHTML = '<div class="empty">Aucun favori. Ajoute-en depuis le menu → GIFs (Giphy).</div>'; return; }
+    resultsEl.innerHTML = '';
+    favs.forEach(g=>{
+      const img = document.createElement('img');
+      img.src = g.preview||g.url; img.loading='lazy'; img.title = g.title||'';
+      img.onclick = ()=> onPick(g.url);
+      resultsEl.appendChild(img);
+    });
+  };
+  panel.querySelector('#gifFavTabBtn').onclick = ()=> showingFavs ? runSearch(panel.querySelector('#gifSearchInput').value.trim()) : showFavs();
+  panel.querySelector('#gifSearchInput').addEventListener('input', e=>{
+    clearTimeout(gifSearchDebounce);
+    const q = e.target.value.trim();
+    gifSearchDebounce = setTimeout(()=> runSearch(q), 400);
+  });
+  runSearch('');
+}
+document.getElementById('gifPickerToggleBtn').onclick = ()=>{
   const panel = document.getElementById('gifPickerPanel');
   if(panel.classList.contains('open')){ panel.classList.remove('open'); return; }
-  panel.innerHTML = '<div class="empty">Chargement...</div>';
   panel.classList.add('open');
-  try{
-    const snap = await db.collection('gifPacks').where('createdBy','==',currentUser.uid).get();
-    let urls = [];
-    snap.forEach(d=>{ urls = urls.concat(d.data().urls||[]); });
-    if(urls.length===0){ panel.innerHTML = '<div class="empty">Aucun GIF. Crée un pack dans le menu → Packs GIF.</div>'; return; }
-    panel.innerHTML='';
-    urls.forEach(u=>{
-      const img = document.createElement('img');
-      img.src = u; img.loading='lazy';
-      img.onclick = ()=> sendCommentGif(u);
-      panel.appendChild(img);
-    });
-  }catch(e){ panel.innerHTML = '<div class="empty">Erreur : '+esc(e.message)+'</div>'; }
+  renderGifSearchUI(panel, (url)=>{ sendCommentGif(url); panel.classList.remove('open'); });
 };
 document.getElementById('closeCommentsBtn').onclick = closeComments;
 document.getElementById('commentsOverlay').onclick = closeComments;
@@ -1472,60 +1537,78 @@ async function vote(postId, act){
 }
 
 /* ---------------- GIF PACKS ---------------- */
+/* ---------------- GIFS (GIPHY) ---------------- */
 function renderGifPacks(main){
   main.innerHTML = `
     <div class="panel">
-      <div class="panel-head">Créer un pack de GIFs</div>
+      <div class="panel-head">🎞️ GIFs (Giphy)</div>
       <div class="panel-body">
-        <div class="field"><label>Nom du pack</label><input id="gpName" placeholder="ex: réactions"></div>
-        <div class="field"><label>Liens de GIFs (un lien par ligne)</label><textarea id="gpUrls" placeholder="https://.../un.gif
-https://.../deux.gif" style="min-height:100px;"></textarea></div>
-        <button id="gpSubmit">Créer le pack</button>
-        <div id="gpMsg" style="color:var(--red); margin-top:6px;"></div>
+        <div class="post-meta" style="margin-bottom:8px;">Recherche un GIF et clique dessus pour l'ajouter à tes favoris. Tu les retrouveras ensuite directement dans le sélecteur de GIF des commentaires.</div>
+        <input type="text" id="gpSearchInput" placeholder="Rechercher un GIF...">
+        <div class="gif-search-grid" id="gpSearchResults" style="margin-top:10px;"><div class="empty">Chargement...</div></div>
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head">Mes packs</div>
-      <div class="panel-body" id="gpList"><div class="empty">Chargement...</div></div>
+      <div class="panel-head">❤️ Mes favoris</div>
+      <div class="panel-body" id="gpFavList"><div class="empty">Chargement...</div></div>
     </div>`;
-  document.getElementById('gpSubmit').onclick = async ()=>{
-    const name = document.getElementById('gpName').value.trim();
-    const urls = document.getElementById('gpUrls').value.split('\n').map(s=>s.trim()).filter(Boolean);
-    const msg = document.getElementById('gpMsg');
-    if(!name || urls.length===0){ msg.textContent='Ajoute un nom et au moins un lien.'; return; }
-    await db.collection('gifPacks').add({
-      name, urls, createdBy: currentUser.uid,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    toast('Pack créé !');
-    renderGifPacks(main);
+
+  let gpDebounce = null;
+  const searchResults = document.getElementById('gpSearchResults');
+  const runSearch = async (q)=>{
+    searchResults.innerHTML = '<div class="empty">Recherche...</div>';
+    try{
+      const gifs = await giphySearch(q);
+      if(gifs.length===0){ searchResults.innerHTML = '<div class="empty">Aucun GIF trouvé.</div>'; return; }
+      searchResults.innerHTML = '';
+      gifs.forEach(g=>{
+        const img = document.createElement('img');
+        img.src = g.preview; img.loading='lazy'; img.title = 'Cliquer pour ajouter aux favoris';
+        img.onclick = ()=> addGifFavorite(g);
+        searchResults.appendChild(img);
+      });
+    }catch(e){ searchResults.innerHTML = '<div class="empty">Erreur Giphy : '+esc(e.message)+'</div>'; }
   };
-  db.collection('gifPacks').where('createdBy','==',currentUser.uid).get().then(snap=>{
-    const list = document.getElementById('gpList');
-    if(!list) return;
-    if(snap.empty){ list.innerHTML='<div class="empty">Aucun pack pour le moment.</div>'; return; }
-    list.innerHTML='';
-    snap.forEach(d=>{
-      const p = d.data();
-      const card = document.createElement('div');
-      card.className='gif-pack-card';
-      card.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <b>${esc(p.name)}</b>
-          <button class="danger small" data-id="${d.id}">Supprimer</button>
-        </div>
-        <div class="gif-pack-thumbs">${(p.urls||[]).map(u=>`<img src="${esc(u)}" loading="lazy">`).join('')}</div>
-      `;
-      card.querySelector('button').onclick = async ()=>{
-        if(!confirm('Supprimer ce pack de GIFs ?')) return;
-        await db.collection('gifPacks').doc(d.id).delete();
-        renderGifPacks(main);
-      };
-      list.appendChild(card);
+  document.getElementById('gpSearchInput').addEventListener('input', e=>{
+    clearTimeout(gpDebounce);
+    const q = e.target.value.trim();
+    gpDebounce = setTimeout(()=> runSearch(q), 400);
+  });
+  runSearch('');
+  renderGifFavList();
+
+  async function addGifFavorite(g){
+    const fav = {url:g.full, preview:g.preview, title:g.title||''};
+    await db.collection('users').doc(currentUser.uid).update({
+      gifFavorites: firebase.firestore.FieldValue.arrayUnion(fav)
     });
-  }).catch(err=>{
-    const list = document.getElementById('gpList');
-    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+    currentUser.gifFavorites = currentUser.gifFavorites||[];
+    currentUser.gifFavorites.push(fav);
+    toast('Ajouté aux favoris ❤️');
+    renderGifFavList();
+  }
+}
+
+function renderGifFavList(){
+  const list = document.getElementById('gpFavList');
+  if(!list) return;
+  const favs = currentUser.gifFavorites||[];
+  if(favs.length===0){ list.innerHTML = '<div class="empty">Aucun favori pour le moment. Recherche un GIF ci-dessus et clique dessus.</div>'; return; }
+  list.innerHTML = '<div class="gif-pack-thumbs" id="gpFavGrid"></div>';
+  const grid = document.getElementById('gpFavGrid');
+  favs.forEach((g, i)=>{
+    const wrap = document.createElement('div');
+    wrap.style.position = 'relative';
+    wrap.innerHTML = `<img src="${esc(g.preview||g.url)}" loading="lazy"><button data-i="${i}" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:18px;height:18px;font-size:11px;cursor:pointer;line-height:1;">×</button>`;
+    wrap.querySelector('button').onclick = async (e)=>{
+      e.stopPropagation();
+      await db.collection('users').doc(currentUser.uid).update({
+        gifFavorites: firebase.firestore.FieldValue.arrayRemove(g)
+      });
+      currentUser.gifFavorites.splice(i,1);
+      renderGifFavList();
+    };
+    grid.appendChild(wrap);
   });
 }
 
