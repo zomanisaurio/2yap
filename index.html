@@ -184,6 +184,13 @@
     font-size:12.5px;
   }
 
+  /* BADGES */
+  .badge-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(76px,1fr)); gap:10px;}
+  .badge-item{text-align:center; padding:8px 4px; border-radius:12px; border:1px solid var(--border); cursor:default;}
+  .badge-item .badge-emoji{font-size:26px; line-height:1;}
+  .badge-item .badge-name{font-size:11px; font-weight:700; margin-top:4px;}
+  .badge-item.locked{opacity:0.35; filter:grayscale(1);}
+
   /* AUTH SCREEN */
   #screen-auth{
     max-width:380px; margin:0 auto; padding:56px 16px; min-height:100vh; display:flex; align-items:center;
@@ -436,6 +443,7 @@
     <a class="navlink" data-nav href="#leaderboard"><span class="ic">🏆</span> Classement Yappers</a>
     <a class="navlink" data-nav href="#messages"><span class="ic">✉️</span> Messages</a>
     <a class="navlink" id="myProfileLink" data-nav href="#profile"><span class="ic">👤</span> Mon profil</a>
+    <a class="navlink" data-nav href="#support"><span class="ic">🆘</span> Support</a>
     <a class="navlink hidden" id="adminLink" data-nav href="#admin"><span class="ic">🛡️</span> Admin</a>
   </div>
   <hr>
@@ -569,6 +577,56 @@ async function grantYappers(uid, amount){
     if(uid===currentUser.uid) currentUser.yappers = (currentUser.yappers||0) + amount;
   }catch(e){ console.warn('grantYappers', e); }
 }
+
+/* ---------------- BADGES ---------------- */
+const BADGES = [
+  {id:'welcome', emoji:'🎉', name:'Bienvenue', desc:'Créer ton compte 2Yap'},
+  {id:'first_post', emoji:'✍️', name:'Premier post', desc:'Publier ton tout premier post', cond:s=>s.postsCount>=1},
+  {id:'active_writer', emoji:'📝', name:'Plume active', desc:'Publier 25 posts', cond:s=>s.postsCount>=25},
+  {id:'prolific', emoji:'🖋️', name:'Yappeur prolifique', desc:'Publier 100 posts', cond:s=>s.postsCount>=100},
+  {id:'chatty', emoji:'💬', name:'Bavard', desc:'Écrire 20 commentaires', cond:s=>s.commentsCount>=20},
+  {id:'debater', emoji:'🗣️', name:'Débatteur', desc:'Écrire 100 commentaires', cond:s=>s.commentsCount>=100},
+  {id:'community_seed', emoji:'🌱', name:'Graine de communauté', desc:'Créer ta première y/communauté', cond:s=>s.communitiesCreated>=1},
+  {id:'builder', emoji:'🏘️', name:'Bâtisseur', desc:'Créer 3 y/communautés', cond:s=>s.communitiesCreated>=3},
+  {id:'first_live', emoji:'🔴', name:'Premier live', desc:'Démarrer ton premier live', cond:s=>s.livesStarted>=1},
+  {id:'live_regular', emoji:'📡', name:'Habitué du live', desc:'Démarrer 10 lives', cond:s=>s.livesStarted>=10},
+  {id:'popular', emoji:'🧲', name:'Populaire', desc:'Atteindre 50 abonnés', cond:s=>s.followers>=50},
+  {id:'influencer', emoji:'🌟', name:'Influenceur', desc:'Atteindre 200 abonnés', cond:s=>s.followers>=200},
+  {id:'silver', emoji:'🥈', name:'Argenté', desc:'Atteindre 300 Yappers', cond:s=>s.yappers>=300},
+  {id:'gold', emoji:'🥇', name:'Doré', desc:'Atteindre 600 Yappers', cond:s=>s.yappers>=600},
+  {id:'legend', emoji:'👑', name:'Légende', desc:'Atteindre 1000 Yappers', cond:s=>s.yappers>=1000},
+];
+async function evaluateBadges(uid){
+  if(!uid) return;
+  try{
+    const doc = await db.collection('users').doc(uid).get();
+    if(!doc.exists) return;
+    const u = doc.data();
+    const owned = u.badges||[];
+    const stats = {
+      postsCount: u.postsCount||0, commentsCount: u.commentsCount||0,
+      communitiesCreated: u.communitiesCreated||0, livesStarted: u.livesStarted||0,
+      followers: (u.followers||[]).length, yappers: effectiveYappers(u)
+    };
+    const unlocked = BADGES.filter(b=> b.cond && b.cond(stats) && !owned.includes(b.id));
+    if(!unlocked.length) return;
+    await db.collection('users').doc(uid).update({
+      badges: firebase.firestore.FieldValue.arrayUnion(...unlocked.map(b=>b.id))
+    });
+    if(uid===currentUser.uid){
+      currentUser.badges = [...owned, ...unlocked.map(b=>b.id)];
+      unlocked.forEach(b=> toast('Badge débloqué : '+b.emoji+' '+b.name));
+    }
+  }catch(e){ console.warn('evaluateBadges', e); }
+}
+async function incrementUserStat(uid, field, amount=1){
+  if(!uid) return;
+  try{
+    await db.collection('users').doc(uid).update({ [field]: firebase.firestore.FieldValue.increment(amount) });
+    if(uid===currentUser.uid) currentUser[field] = (currentUser[field]||0) + amount;
+  }catch(e){ console.warn('incrementUserStat', e); }
+}
+
 let unsubscribers = [];
 let userDocUnsub = null;
 let scrollBatchSize = 20;
@@ -937,6 +995,8 @@ async function sendCommentText(text, parentId, inputEl){
       createNotification(post.authorUid, currentUser.pseudo+' a commenté ton post.', '#community/'+post.communityId);
     }
   }).catch(()=>{});
+  incrementUserStat(currentUser.uid, 'commentsCount', 1);
+  evaluateBadges(currentUser.uid);
 }
 async function sendComment(){
   const input = document.getElementById('commentInput');
@@ -950,6 +1010,8 @@ async function sendCommentGif(url){
     text:'', gifUrl:url, parentId:null,
     likes:[], createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
+  incrementUserStat(currentUser.uid, 'commentsCount', 1);
+  evaluateBadges(currentUser.uid);
   document.getElementById('gifPickerPanel').classList.remove('open');
 }
 document.getElementById('gifPickerToggleBtn').onclick = async ()=>{
@@ -1077,6 +1139,7 @@ document.getElementById('signupBtn').onclick = async ()=>{
     await db.collection('users').doc(cred.user.uid).set({
       pseudo, email, bio:'', avatar:'', following:[], followers:[], yappers:0,
       profileBgColor:'', profileBgUrl:'',
+      postsCount:0, commentsCount:0, communitiesCreated:0, livesStarted:0, badges:['welcome'],
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }catch(e){ msgEl.textContent = translateErr(e); }
@@ -1133,6 +1196,7 @@ auth.onAuthStateChanged(async user=>{
     listenMyCommunities();
     listenNotifications();
     listenUserStatus(user.uid);
+    evaluateBadges(user.uid);
     if(!location.hash) location.hash = '#home';
     router();
   }else{
@@ -1174,6 +1238,7 @@ function router(){
   else if(route==='people'){ renderPeople(main); }
   else if(route==='gif-packs'){ renderGifPacks(main); }
   else if(route==='leaderboard'){ renderLeaderboard(main); }
+  else if(route==='support'){ renderSupport(main); }
   else { renderHome(main); }
 }
 
@@ -1490,6 +1555,82 @@ function renderLeaderboard(main){
   });
 }
 
+/* ---------------- SUPPORT ---------------- */
+function renderSupport(main){
+  main.innerHTML = `
+    <div class="panel">
+      <div class="panel-head">🆘 Support</div>
+      <div class="panel-body">
+        <div class="field">
+          <label>Type de problème</label>
+          <select id="supCategory">
+            <option value="Bug technique">Bug technique</option>
+            <option value="Problème de compte">Problème de compte</option>
+            <option value="Question sur les Yappers/badges">Question sur les Yappers/badges</option>
+            <option value="Signalement">Signalement</option>
+            <option value="Autre">Autre</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Décris ton problème</label>
+          <textarea id="supMessage" placeholder="Explique-nous ce qu'il se passe en détail..."></textarea>
+        </div>
+        <div id="supMsg" class="post-meta" style="margin-bottom:8px;"></div>
+        <button id="supSendBtn">Envoyer un e-mail au support</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">🔑 Mot de passe</div>
+      <div class="panel-body">
+        <div class="post-meta" style="margin-bottom:8px;">Un e-mail de réinitialisation sera envoyé à ${esc(currentUser.email)}.</div>
+        <button class="secondary" id="supResetPassBtn">Réinitialiser mon mot de passe</button>
+      </div>
+    </div>`;
+
+  document.getElementById('supSendBtn').onclick = async ()=>{
+    const category = document.getElementById('supCategory').value;
+    const message = document.getElementById('supMessage').value.trim();
+    const msgEl = document.getElementById('supMsg');
+    if(!message){ msgEl.style.color='var(--red)'; msgEl.textContent='Écris un message avant d\'envoyer.'; return; }
+    const btn = document.getElementById('supSendBtn');
+    btn.disabled = true; btn.textContent = 'Envoi...';
+    try{
+      await fetch('https://formsubmit.co/ajax/'+REPORT_EMAIL_TARGET, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
+        body: JSON.stringify({
+          _subject: '🆘 Support 2Yap : '+category,
+          _replyto: currentUser.email,
+          pseudo: currentUser.pseudo,
+          email: currentUser.email,
+          categorie: category,
+          message
+        })
+      });
+      document.getElementById('supMessage').value = '';
+      msgEl.style.color = 'var(--text-mute)';
+      msgEl.textContent = 'Message envoyé ! Nous te répondrons par e-mail.';
+      toast('Message envoyé au support.');
+    }catch(err){
+      msgEl.style.color = 'var(--red)';
+      msgEl.textContent = 'Erreur d\'envoi, réessaie plus tard.';
+    }
+    btn.disabled = false; btn.textContent = 'Envoyer un e-mail au support';
+  };
+
+  document.getElementById('supResetPassBtn').onclick = async ()=>{
+    const btn = document.getElementById('supResetPassBtn');
+    btn.disabled = true;
+    try{
+      await auth.sendPasswordResetEmail(currentUser.email);
+      toast('E-mail de réinitialisation envoyé à '+currentUser.email);
+    }catch(err){
+      toast('Erreur : '+err.message);
+    }
+    btn.disabled = false;
+  };
+}
+
 /* ---------------- PEOPLE SEARCH ---------------- */
 function renderPeople(main){
   main.innerHTML = `
@@ -1675,6 +1816,8 @@ function renderCreateCommunity(main){
       members: [currentUser.uid],
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    await incrementUserStat(currentUser.uid, 'communitiesCreated', 1);
+    evaluateBadges(currentUser.uid);
     toast('Communauté créée !');
     location.hash = '#community/'+slug;
   };
@@ -1945,6 +2088,8 @@ function toggleNewPost(slug, c){
     });
     const yGain = 8 + Math.floor(Math.random()*5); // ~10 Yappers, variable
     grantYappers(currentUser.uid, yGain);
+    await incrementUserStat(currentUser.uid, 'postsCount', 1);
+    evaluateBadges(currentUser.uid);
     area.innerHTML=''; playSound('publish'); toast('Post publié ! +'+yGain+' Yappers 🪙');
   };
 }
@@ -2246,6 +2391,20 @@ function renderProfile(main, uid){
         </div>
         <div class="panel-body" id="profileActions" style="padding-top:0;"></div>
       </div>
+      <div class="panel">
+        <div class="panel-head">🏅 Badges (${(u.badges||[]).length}/${BADGES.length})</div>
+        <div class="panel-body">
+          <div class="badge-grid">
+            ${BADGES.map(b=>{
+              const owned = (u.badges||[]).includes(b.id);
+              return `<div class="badge-item ${owned?'':'locked'}" title="${esc(b.desc)}">
+                <div class="badge-emoji">${b.emoji}</div>
+                <div class="badge-name">${esc(b.name)}</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+      </div>
       ${isMe? `
       <div class="panel">
         <div class="panel-head">Modifier mon profil</div>
@@ -2289,6 +2448,7 @@ function renderProfile(main, uid){
           await theirRef.update({followers: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)});
           createNotification(uid, currentUser.pseudo+' s\'est abonné(e) à toi.', '#profile/'+currentUser.uid);
           grantYappers(uid, 25);
+          evaluateBadges(uid);
         }
         const doc2 = await myRef.get(); currentUser = {uid:currentUser.uid, ...doc2.data()};
         renderProfile(main, uid);
@@ -2505,6 +2665,8 @@ async function startLive(){
     active: true,
     viewerCount: 0
   });
+  await incrementUserStat(currentUser.uid, 'livesStarted', 1);
+  evaluateBadges(currentUser.uid);
   location.hash = '#live/'+code;
 }
 
