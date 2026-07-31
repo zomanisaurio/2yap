@@ -454,7 +454,7 @@
     <a class="navlink" data-nav href="#explore"><span class="ic">🔎</span> Communautés</a>
     <a class="navlink" data-nav href="#people"><span class="ic">👥</span> Personnes</a>
     <a class="navlink" data-nav href="#create-community"><span class="ic">➕</span> Créer y/communauté</a>
-    <a class="navlink" data-nav href="#gif-packs"><span class="ic">🎞️</span> Packs GIF</a>
+    <a class="navlink" data-nav href="#gif-packs"><span class="ic">🎞️</span> GIFs</a>
     <a class="navlink" data-nav href="#leaderboard"><span class="ic">🏆</span> Classement Yappers</a>
     <a class="navlink" data-nav href="#messages"><span class="ic">✉️</span> Messages</a>
     <a class="navlink" id="myProfileLink" data-nav href="#profile"><span class="ic">👤</span> Mon profil</a>
@@ -561,23 +561,6 @@ function isAdminEmail(email){ return ADMIN_EMAILS.includes((email||'').toLowerCa
 // Les comptes admin ont des Yappers illimités (tous les paliers débloqués, jamais bloqués).
 function effectiveYappers(u){ return (u && isAdminEmail(u.email)) ? Infinity : ((u&&u.yappers)||0); }
 const REPORT_EMAIL_TARGET = 'zomanifrance@gmail.com';
-// Clé publique de démo Giphy (limitée en débit). Remplace-la par ta propre clé gratuite
-// obtenue sur https://developers.giphy.com pour un usage en production.
-const GIPHY_API_KEY = 'dc6zaTOxFJmzC';
-async function giphySearch(query){
-  const url = query
-    ? `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(query)}&limit=24&rating=pg-13&lang=fr`
-    : `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`;
-  const res = await fetch(url);
-  if(!res.ok) throw new Error('Giphy indisponible ('+res.status+')');
-  const data = await res.json();
-  return (data.data||[]).map(g=>({
-    id: g.id,
-    preview: (g.images.fixed_height_small||g.images.fixed_height||{}).url,
-    full: (g.images.fixed_height||g.images.original||{}).url,
-    title: g.title||''
-  }));
-}
 const BAN_THRESHOLD = 5;
 
 /* ---------------- YAPPERS (token / réputation) ---------------- */
@@ -1050,32 +1033,40 @@ let gifSearchDebounce = null;
 function renderGifSearchUI(panel, onPick){
   panel.innerHTML = `
     <div style="display:flex; gap:6px;">
-      <input type="text" id="gifSearchInput" placeholder="Rechercher un GIF (Giphy)..." style="flex:1;">
-      <button class="secondary small" id="gifFavTabBtn" type="button">❤️ Favoris</button>
+      <input type="text" id="gifBrowseQuery" placeholder="Rechercher sur Giphy...">
+      <button class="secondary small" id="gifOpenBtn" type="button">🔍</button>
+      <button class="secondary small" id="gifFavTabBtn" type="button">❤️</button>
     </div>
-    <div class="gif-search-grid" id="gifSearchResults"><div class="empty">Chargement des GIFs tendance...</div></div>
+    <iframe id="gifBrowseFrame" src="https://giphy.com/trending-gifs" style="width:100%; height:150px; border:1px solid var(--border); border-radius:8px;"></iframe>
+    <div class="post-meta">Clic droit sur un GIF → « Copier l'adresse de l'image », puis colle le lien ici :</div>
+    <div style="display:flex; gap:6px;">
+      <input type="text" id="gifUrlInput" placeholder="Colle l'URL du GIF ici...">
+      <button class="secondary small" id="gifUrlAddBtn" type="button">Envoyer</button>
+    </div>
+    <div class="gif-search-grid" id="gifSearchResults"></div>
   `;
+  const frame = panel.querySelector('#gifBrowseFrame');
+  const queryInput = panel.querySelector('#gifBrowseQuery');
   const resultsEl = panel.querySelector('#gifSearchResults');
   let showingFavs = false;
-  const runSearch = async (q)=>{
-    showingFavs = false;
-    resultsEl.innerHTML = '<div class="empty">Recherche...</div>';
-    try{
-      const gifs = await giphySearch(q);
-      if(gifs.length===0){ resultsEl.innerHTML = '<div class="empty">Aucun GIF trouvé.</div>'; return; }
-      resultsEl.innerHTML = '';
-      gifs.forEach(g=>{
-        const img = document.createElement('img');
-        img.src = g.preview; img.loading = 'lazy'; img.title = g.title;
-        img.onclick = ()=> onPick(g.full);
-        resultsEl.appendChild(img);
-      });
-    }catch(e){ resultsEl.innerHTML = '<div class="empty">Erreur Giphy : '+esc(e.message)+'</div>'; }
+  const openSearch = ()=>{
+    const q = queryInput.value.trim();
+    frame.src = q ? 'https://giphy.com/search/'+encodeURIComponent(q) : 'https://giphy.com/trending-gifs';
+  };
+  panel.querySelector('#gifOpenBtn').onclick = openSearch;
+  queryInput.addEventListener('keydown', e=>{ if(e.key==='Enter') openSearch(); });
+  panel.querySelector('#gifUrlAddBtn').onclick = ()=>{
+    const input = panel.querySelector('#gifUrlInput');
+    const url = input.value.trim();
+    if(!url){ toast('Colle une URL de GIF d\'abord.'); return; }
+    input.value = '';
+    onPick(url);
   };
   const showFavs = ()=>{
-    showingFavs = true;
+    showingFavs = !showingFavs;
+    if(!showingFavs){ resultsEl.innerHTML = ''; return; }
     const favs = currentUser.gifFavorites||[];
-    if(favs.length===0){ resultsEl.innerHTML = '<div class="empty">Aucun favori. Ajoute-en depuis le menu → GIFs (Giphy).</div>'; return; }
+    if(favs.length===0){ resultsEl.innerHTML = '<div class="empty">Aucun favori. Ajoute-en depuis le menu → GIFs.</div>'; return; }
     resultsEl.innerHTML = '';
     favs.forEach(g=>{
       const img = document.createElement('img');
@@ -1084,13 +1075,7 @@ function renderGifSearchUI(panel, onPick){
       resultsEl.appendChild(img);
     });
   };
-  panel.querySelector('#gifFavTabBtn').onclick = ()=> showingFavs ? runSearch(panel.querySelector('#gifSearchInput').value.trim()) : showFavs();
-  panel.querySelector('#gifSearchInput').addEventListener('input', e=>{
-    clearTimeout(gifSearchDebounce);
-    const q = e.target.value.trim();
-    gifSearchDebounce = setTimeout(()=> runSearch(q), 400);
-  });
-  runSearch('');
+  panel.querySelector('#gifFavTabBtn').onclick = showFavs;
 }
 document.getElementById('gifPickerToggleBtn').onclick = ()=>{
   const panel = document.getElementById('gifPickerPanel');
@@ -1417,20 +1402,12 @@ function listenMyCommunities(){
   if(myCommunitiesUnsub) myCommunitiesUnsub();
   myCommunitiesUnsub = db.collection('communities').where('members','array-contains',currentUser.uid)
     .onSnapshot(snap=>{
-      myJoinedCommunityIds = [];
       const list = document.getElementById('myCommunitiesList');
-      if(snap.empty){ list.innerHTML = '<div class="empty">Aucune pour l\'instant</div>'; return; }
-      list.innerHTML = '';
-      snap.forEach(d=>{
-        const c = d.data();
-        myJoinedCommunityIds.push(d.id);
-        const a = document.createElement('a');
-        a.href = '#community/'+d.id;
-        a.setAttribute('data-nav','');
-        a.style.display='block'; a.style.marginBottom='6px';
-        a.innerHTML = '<span class="ybadge">y/'+esc(c.slug)+'</span>';
-        list.appendChild(a);
-      });
+      if(!list) return;
+      myJoinedCommunityIds = [];
+      const joined = [];
+      snap.forEach(d=>{ myJoinedCommunityIds.push(d.id); joined.push({id:d.id, ...d.data()}); });
+      renderMyCommunitiesList(list, joined);
     }, err=>{
       console.error(err);
       const list = document.getElementById('myCommunitiesList');
@@ -1438,15 +1415,80 @@ function listenMyCommunities(){
     });
 }
 
+async function renderMyCommunitiesList(list, joined){
+  list.innerHTML = '';
+  if(joined.length===0){
+    list.innerHTML = '<div class="empty">Aucune pour l\'instant</div>';
+  }
+  joined.forEach(c=>{
+    const a = document.createElement('a');
+    a.href = '#community/'+c.id;
+    a.setAttribute('data-nav','');
+    a.style.display='block'; a.style.marginBottom='6px';
+    a.innerHTML = '<span class="ybadge">y/'+esc(c.slug)+'</span>';
+    list.appendChild(a);
+  });
+  if(joined.length < 3){
+    try{
+      const need = 3 - joined.length;
+      const snap = await db.collection('communities').limit(100).get();
+      let all = []; snap.forEach(d=>{ if(!myJoinedCommunityIds.includes(d.id)) all.push({id:d.id, ...d.data()}); });
+      all.sort((a,b)=> (b.members||[]).length - (a.members||[]).length);
+      const suggestions = all.slice(0, need);
+      if(list.querySelector('.empty')) list.innerHTML = '';
+      if(suggestions.length){
+        const label = document.createElement('div');
+        label.className = 'empty';
+        label.style.margin = '4px 0';
+        label.textContent = 'Suggestions (les plus populaires) :';
+        list.appendChild(label);
+        suggestions.forEach(c=>{
+          const a = document.createElement('a');
+          a.href = '#community/'+c.id;
+          a.setAttribute('data-nav','');
+          a.style.display='block'; a.style.marginBottom='6px'; a.style.opacity='0.75';
+          a.innerHTML = '<span class="ybadge">y/'+esc(c.slug)+'</span> <span style="font-size:10.5px;">'+(c.members||[]).length+' membres</span>';
+          list.appendChild(a);
+        });
+      } else if(joined.length===0){
+        list.innerHTML = '<div class="empty">Aucune communauté pour le moment</div>';
+      }
+    }catch(e){ console.warn('suggestions communautés', e); }
+  }
+}
+
 /* ---------------- HOME FEED ---------------- */
 function renderHome(main){
   main.innerHTML = '<div class="panel"><div class="panel-head">Fil d\'actualité</div><div class="panel-body" id="feedBody"><div class="empty">Chargement...</div></div></div>';
-  const un = db.collection('posts').orderBy('createdAt','desc').limit(40).onSnapshot(snap=>{
+  buildHomeFeedCommunityPool().then(poolIds=> subscribeHomeFeed(poolIds));
+}
+
+async function buildHomeFeedCommunityPool(){
+  const joinedSnap = await db.collection('communities').where('members','array-contains',currentUser.uid).get();
+  const poolIds = []; joinedSnap.forEach(d=> poolIds.push(d.id));
+  if(poolIds.length < 3){
+    try{
+      const need = 3 - poolIds.length;
+      const allSnap = await db.collection('communities').limit(100).get();
+      const others = [];
+      allSnap.forEach(d=>{ if(!poolIds.includes(d.id)) others.push({id:d.id, members:d.data().members||[]}); });
+      others.sort((a,b)=> b.members.length - a.members.length);
+      others.slice(0, need).forEach(c=> poolIds.push(c.id));
+    }catch(e){ console.warn('pool fil d\'actualité', e); }
+  }
+  return poolIds;
+}
+
+function subscribeHomeFeed(poolIds){
+  const un = db.collection('posts').orderBy('createdAt','desc').limit(100).onSnapshot(snap=>{
     const body = document.getElementById('feedBody');
     if(!body) return;
-    if(snap.empty){ body.innerHTML='<div class="empty">Aucun post. Rejoins ou crée une communauté !</div>'; return; }
+    let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
+    if(poolIds.length) posts = posts.filter(p=> poolIds.includes(p.communityId));
+    posts = posts.slice(0, 40);
+    if(posts.length===0){ body.innerHTML='<div class="empty">Aucun post. Rejoins ou crée une communauté !</div>'; return; }
     body.innerHTML='';
-    snap.forEach(d=> body.appendChild(renderPostCard(d.id, d.data())) );
+    posts.forEach(p=> body.appendChild(renderPostCard(p.id, p)));
   }, err=>{
     console.error(err);
     const body = document.getElementById('feedBody');
@@ -1541,11 +1583,18 @@ async function vote(postId, act){
 function renderGifPacks(main){
   main.innerHTML = `
     <div class="panel">
-      <div class="panel-head">🎞️ GIFs (Giphy)</div>
+      <div class="panel-head">🎞️ GIFs</div>
       <div class="panel-body">
-        <div class="post-meta" style="margin-bottom:8px;">Recherche un GIF et clique dessus pour l'ajouter à tes favoris. Tu les retrouveras ensuite directement dans le sélecteur de GIF des commentaires.</div>
-        <input type="text" id="gpSearchInput" placeholder="Rechercher un GIF...">
-        <div class="gif-search-grid" id="gpSearchResults" style="margin-top:10px;"><div class="empty">Chargement...</div></div>
+        <div class="post-meta" style="margin-bottom:8px;">Cherche un GIF sur Giphy ci-dessous, clic droit dessus → « Copier l'adresse de l'image », puis colle l'URL (une par ligne) pour l'ajouter à tes favoris.</div>
+        <div style="display:flex; gap:6px; margin-bottom:8px;">
+          <input type="text" id="gpBrowseQuery" placeholder="Rechercher sur Giphy...">
+          <button class="secondary small" id="gpOpenBtn" type="button">🔍</button>
+          <a href="https://giphy.com" target="_blank" rel="noopener" class="secondary small" style="text-decoration:none; display:inline-flex; align-items:center; padding:0 10px; border-radius:8px;">↗</a>
+        </div>
+        <iframe id="gpBrowseFrame" src="https://giphy.com/trending-gifs" style="width:100%; height:220px; border:1px solid var(--border); border-radius:8px;"></iframe>
+        <div class="field" style="margin-top:10px;"><label>Colle une ou plusieurs URLs de GIF (une par ligne)</label><textarea id="gpUrls" placeholder="https://.../un.gif" style="min-height:80px;"></textarea></div>
+        <button id="gpAddBtn">Ajouter à mes favoris</button>
+        <div id="gpMsg" class="post-meta" style="margin-top:6px;"></div>
       </div>
     </div>
     <div class="panel">
@@ -1553,40 +1602,30 @@ function renderGifPacks(main){
       <div class="panel-body" id="gpFavList"><div class="empty">Chargement...</div></div>
     </div>`;
 
-  let gpDebounce = null;
-  const searchResults = document.getElementById('gpSearchResults');
-  const runSearch = async (q)=>{
-    searchResults.innerHTML = '<div class="empty">Recherche...</div>';
-    try{
-      const gifs = await giphySearch(q);
-      if(gifs.length===0){ searchResults.innerHTML = '<div class="empty">Aucun GIF trouvé.</div>'; return; }
-      searchResults.innerHTML = '';
-      gifs.forEach(g=>{
-        const img = document.createElement('img');
-        img.src = g.preview; img.loading='lazy'; img.title = 'Cliquer pour ajouter aux favoris';
-        img.onclick = ()=> addGifFavorite(g);
-        searchResults.appendChild(img);
-      });
-    }catch(e){ searchResults.innerHTML = '<div class="empty">Erreur Giphy : '+esc(e.message)+'</div>'; }
+  const frame = document.getElementById('gpBrowseFrame');
+  const queryInput = document.getElementById('gpBrowseQuery');
+  const openSearch = ()=>{
+    const q = queryInput.value.trim();
+    frame.src = q ? 'https://giphy.com/search/'+encodeURIComponent(q) : 'https://giphy.com/trending-gifs';
   };
-  document.getElementById('gpSearchInput').addEventListener('input', e=>{
-    clearTimeout(gpDebounce);
-    const q = e.target.value.trim();
-    gpDebounce = setTimeout(()=> runSearch(q), 400);
-  });
-  runSearch('');
-  renderGifFavList();
+  document.getElementById('gpOpenBtn').onclick = openSearch;
+  queryInput.addEventListener('keydown', e=>{ if(e.key==='Enter') openSearch(); });
 
-  async function addGifFavorite(g){
-    const fav = {url:g.full, preview:g.preview, title:g.title||''};
+  document.getElementById('gpAddBtn').onclick = async ()=>{
+    const urls = document.getElementById('gpUrls').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    const msg = document.getElementById('gpMsg');
+    if(urls.length===0){ msg.style.color='var(--red)'; msg.textContent = 'Colle au moins une URL.'; return; }
+    const favs = urls.map(u=>({url:u, preview:u, title:''}));
     await db.collection('users').doc(currentUser.uid).update({
-      gifFavorites: firebase.firestore.FieldValue.arrayUnion(fav)
+      gifFavorites: firebase.firestore.FieldValue.arrayUnion(...favs)
     });
-    currentUser.gifFavorites = currentUser.gifFavorites||[];
-    currentUser.gifFavorites.push(fav);
-    toast('Ajouté aux favoris ❤️');
+    currentUser.gifFavorites = (currentUser.gifFavorites||[]).concat(favs);
+    document.getElementById('gpUrls').value = '';
+    msg.style.color = 'var(--text-mute)';
+    msg.textContent = urls.length+' GIF(s) ajouté(s) aux favoris.';
     renderGifFavList();
-  }
+  };
+  renderGifFavList();
 }
 
 function renderGifFavList(){
