@@ -2390,7 +2390,8 @@ const GAME_TEMPLATES = {
   silhouette:{ emoji:'👤', name:'Qui c\'est ?',         better:'desc', unit:'pts', desc:'Devine la silhouette en moins de temps. Importe tes images.' },
   sequence:  { emoji:'🎵', name:'Répète la séquence',   better:'desc', unit:'pts', desc:'Mémorise et reproduis la séquence de touches. Importe tes images/sons.' },
   dodge:     { emoji:'🚗', name:'Évite les obstacles',  better:'desc', unit:'m',   desc:'Reste en vie le plus longtemps. Importe ton perso et les obstacles.' },
-  quiz:      { emoji:'❓', name:'Quiz maison',           better:'desc', unit:'pts', desc:'Questions créées par l\'admin. Images optionnelles par question.' }
+  quiz:      { emoji:'❓', name:'Quiz maison',           better:'desc', unit:'pts', desc:'Questions créées par l\'admin. Images optionnelles par question.' },
+  custom:    { emoji:'🛠️', name:'Jeu personnalisé',      better:'desc', unit:'pts', desc:'Crée tes propres éléments : comportements, effets, vies, score et règles sur mesure.' }
 };
 
 /* ---------- INFRA COMMUNE ---------- */
@@ -2492,7 +2493,7 @@ function startGamePlay(slug, g, btn){
   startGameMusic(g.musicUrl);
   const runners = {maze:playMazeGame, runner:playRunnerGame, shooter:playShooterGame,
     memory:playMemoryGame, silhouette:playSilhouetteGame, sequence:playSequenceGame,
-    dodge:playDodgeGame, quiz:playQuizGame};
+    dodge:playDodgeGame, quiz:playQuizGame, custom:playCustomGame};
   (runners[g.type]||((a)=>{ a.innerHTML='<div class="empty">Jeu inconnu.</div>'; }))(area, slug, g);
 }
 
@@ -2594,6 +2595,30 @@ function renderAddGameForm(area, slug, onDone){
         </div>
       </div>
 
+      <!-- CUSTOM -->
+      <div class="ag-specific hidden" data-for="custom">
+        <div class="post-meta" style="margin-bottom:8px;">Ton personnage est contrôlé par le joueur. Ajoute des éléments (ennemis, bonus, pièces...) avec leur propre comportement et leur effet au contact.</div>
+        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agCPlayerImg" accept="image/*"></div>
+        <div class="field"><label>Déplacement du personnage</label>
+          <select id="agCPlayerMode">
+            <option value="four">4 directions (haut/bas/gauche/droite)</option>
+            <option value="horizontal">Gauche / droite uniquement</option>
+            <option value="drag">Suit le doigt / la souris</option>
+          </select>
+        </div>
+        <div class="field"><label>Vitesse du personnage : <span id="agCSpeedVal">5</span></label>
+          <input type="range" id="agCPlayerSpeed" min="2" max="10" value="5">
+        </div>
+        <div class="field"><label>❤️ Vies (0 = pas de système de vies)</label><input type="number" id="agCLives" value="3" min="0" max="9"></div>
+        <div class="field"><label>🎯 Score à atteindre pour gagner (0 = pas de limite, on joue au score)</label><input type="number" id="agCWinScore" value="0" min="0"></div>
+        <div class="field"><label>⏱️ Durée max (secondes, 0 = illimité)</label><input type="number" id="agCDuration" value="60" min="0" max="600"></div>
+        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agCBg" accept="image/*"></div>
+
+        <div class="drawer-label" style="margin:10px 0 4px;">Éléments</div>
+        <div id="agCEntities"></div>
+        <button type="button" class="secondary small" id="agCAddEntity">+ Ajouter un élément</button>
+      </div>
+
       <button id="agSubmit">Créer le mini-jeu</button>
       <div id="agMsg" style="color:var(--red);margin-top:6px;"></div>
     </div>`;
@@ -2607,6 +2632,60 @@ function renderAddGameForm(area, slug, onDone){
   typeSelect.addEventListener('change', e=> showFields(e.target.value));
   area.querySelector('#agMazeSize').oninput = e=> document.getElementById('mazeSizeVal').textContent = e.target.value;
   area.querySelector('#agMazeEnemies').oninput = e=> document.getElementById('mazeEnemyVal').textContent = e.target.value;
+  area.querySelector('#agCPlayerSpeed').oninput = e=> document.getElementById('agCSpeedVal').textContent = e.target.value;
+
+  let entityCount = 0;
+  function addEntityRow(){
+    entityCount++;
+    const id = 'ent'+entityCount;
+    const row = document.createElement('div');
+    row.className = 'panel';
+    row.dataset.entId = id;
+    row.style.marginBottom = '10px';
+    row.innerHTML = `
+      <div class="panel-body">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <b>Élément ${entityCount}</b>
+          <button type="button" class="danger small" data-remove>Retirer</button>
+        </div>
+        <div class="field"><label>🖼️ Image</label><input type="file" id="${id}img" accept="image/*"></div>
+        <div class="field"><label>Comportement</label>
+          <select id="${id}behavior">
+            <option value="fall">Tombe du haut vers le bas</option>
+            <option value="patrol">Patrouille horizontalement</option>
+            <option value="chase">Poursuit le personnage</option>
+            <option value="random">Se déplace au hasard</option>
+            <option value="static">Immobile</option>
+          </select>
+        </div>
+        <div class="field"><label>Vitesse : <span class="entSpeedVal">4</span></label>
+          <input type="range" id="${id}speed" min="1" max="10" value="4">
+        </div>
+        <div class="field"><label>Apparaît toutes les (secondes) : <span class="entRateVal">2</span></label>
+          <input type="range" id="${id}rate" min="0.3" max="6" step="0.1" value="2">
+        </div>
+        <div class="field"><label>Taille (px) : <span class="entSizeVal">32</span></label>
+          <input type="range" id="${id}size" min="16" max="64" value="32">
+        </div>
+        <div class="field"><label>Effet au contact avec le personnage</label>
+          <select id="${id}effect">
+            <option value="score1">+1 point</option>
+            <option value="score5">+5 points</option>
+            <option value="scoreMinus1">-1 point</option>
+            <option value="life">Perd une vie</option>
+            <option value="win">Victoire immédiate</option>
+            <option value="lose">Défaite immédiate</option>
+          </select>
+        </div>
+      </div>`;
+    row.querySelector('[data-remove]').onclick = ()=> row.remove();
+    row.querySelector(`#${id}speed`).oninput = e=> row.querySelector('.entSpeedVal').textContent = e.target.value;
+    row.querySelector(`#${id}rate`).oninput = e=> row.querySelector('.entRateVal').textContent = e.target.value;
+    row.querySelector(`#${id}size`).oninput = e=> row.querySelector('.entSizeVal').textContent = e.target.value;
+    document.getElementById('agCEntities').appendChild(row);
+  }
+  document.getElementById('agCAddEntity').onclick = addEntityRow;
+  addEntityRow(); // au moins un élément par défaut
 
   document.getElementById('agSubmit').onclick = async ()=>{
     const type = typeSelect.value;
@@ -2617,8 +2696,20 @@ function renderAddGameForm(area, slug, onDone){
     msg.textContent=''; const btn = document.getElementById('agSubmit');
     btn.disabled=true; btn.textContent='Création...';
 
-    async function toB64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
-    async function filesToB64(files){ const arr=[]; for(const f of Array.from(files)) arr.push(await toB64(f)); return arr; }
+    const GIF_LIMIT_SINGLE = 350000;  // ~350 Ko par GIF pour un slot d'image unique (perso, ennemi, fond...)
+    const GIF_LIMIT_MULTI  = 130000;  // ~130 Ko par GIF quand il y en a plusieurs (memory, silhouette...)
+    async function rawB64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
+    async function toB64(file, limit){
+      limit = limit || GIF_LIMIT_SINGLE;
+      if(file.type==='image/gif'){
+        if(file.size > limit){
+          throw new Error('Ce GIF est trop lourd ('+Math.round(file.size/1024)+' Ko, limite '+Math.round(limit/1024)+' Ko) — choisis un GIF plus léger pour garder l\'animation.');
+        }
+        return await rawB64(file); // pas de passage par canvas : garde l'animation intacte
+      }
+      return await resizeImageBase64(file, 420, 0.75); // image statique : compressée automatiquement
+    }
+    async function filesToB64(files, limit){ const arr=[]; for(const f of Array.from(files)) arr.push(await toB64(f, limit)); return arr; }
 
     try{
       const doc = {type, title, desc, createdBy:currentUser.uid, createdAt:firebase.firestore.FieldValue.serverTimestamp()};
@@ -2651,16 +2742,16 @@ function renderAddGameForm(area, slug, onDone){
       } else if(type==='memory'){
         const files=document.getElementById('agMemoryCards').files;
         if(!files.length){ msg.textContent='Importe au moins 4 images.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
-        doc.cards = await filesToB64(files);
+        doc.cards = await filesToB64(files, GIF_LIMIT_MULTI);
       } else if(type==='silhouette'){
         const names = document.getElementById('agSilNames').value.split('\n').map(s=>s.trim()).filter(Boolean);
-        const imgs = await filesToB64(document.getElementById('agSilImages').files);
+        const imgs = await filesToB64(document.getElementById('agSilImages').files, GIF_LIMIT_MULTI);
         if(!names.length||!imgs.length){ msg.textContent='Ajoute des noms et des images.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
         doc.questions = names.map((n,i)=>({name:n, img:imgs[i]||imgs[0]}));
         doc.timePerQ = parseInt(document.getElementById('agSilTime').value,10)||10;
       } else if(type==='sequence'){
         doc.seqMax = parseInt(document.getElementById('agSeqMax').value,10)||8;
-        doc.seqImages = await filesToB64(document.getElementById('agSeqImages').files);
+        doc.seqImages = await filesToB64(document.getElementById('agSeqImages').files, GIF_LIMIT_MULTI);
       } else if(type==='dodge'){
         const pf=document.getElementById('agDodgePlayer').files[0];
         const of=document.getElementById('agDodgeObstacle').files[0];
@@ -2678,7 +2769,35 @@ function renderAddGameForm(area, slug, onDone){
         }
         if(!questions.length){ msg.textContent='Ajoute au moins une question.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
         doc.questions = questions;
-        doc.quizImages = await filesToB64(document.getElementById('agQuizImages').files);
+        doc.quizImages = await filesToB64(document.getElementById('agQuizImages').files, GIF_LIMIT_MULTI);
+      } else if(type==='custom'){
+        const pf = document.getElementById('agCPlayerImg').files[0];
+        if(pf) doc.cPlayerImg = await toB64(pf);
+        doc.cPlayerMode = document.getElementById('agCPlayerMode').value;
+        doc.cPlayerSpeed = parseInt(document.getElementById('agCPlayerSpeed').value,10)||5;
+        doc.cLives = parseInt(document.getElementById('agCLives').value,10)||0;
+        doc.cWinScore = parseInt(document.getElementById('agCWinScore').value,10)||0;
+        doc.cDuration = parseInt(document.getElementById('agCDuration').value,10)||0;
+        const bgf = document.getElementById('agCBg').files[0];
+        if(bgf) doc.cBg = await toB64(bgf, GIF_LIMIT_MULTI);
+        const rows = Array.from(document.getElementById('agCEntities').children);
+        if(!rows.length){ msg.textContent='Ajoute au moins un élément.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        const entities = [];
+        for(const row of rows){
+          const id = row.dataset.entId;
+          const f = document.getElementById(id+'img').files[0];
+          if(!f) continue;
+          entities.push({
+            img: await toB64(f, GIF_LIMIT_MULTI),
+            behavior: document.getElementById(id+'behavior').value,
+            speed: parseInt(document.getElementById(id+'speed').value,10)||4,
+            rate: parseFloat(document.getElementById(id+'rate').value)||2,
+            size: parseInt(document.getElementById(id+'size').value,10)||32,
+            effect: document.getElementById(id+'effect').value
+          });
+        }
+        if(!entities.length){ msg.textContent='Chaque élément a besoin d\'une image.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        doc.cEntities = entities;
       }
       await db.collection('communities').doc(slug).collection('games').add(doc);
       toast('Mini-jeu créé !');
@@ -2693,6 +2812,181 @@ function renderAddGameForm(area, slug, onDone){
    ================================================================ */
 
 /* ---- 1. LABYRINTHE ---- */
+/* ================================================================
+   DÉCODEUR GIF89a MAISON + SPRITES ANIMÉS POUR CANVAS
+   (les <canvas> ne jouent jamais l'animation d'un GIF nativement —
+   on décode donc les frames nous-mêmes pour les faire défiler)
+   ================================================================ */
+function lzwDecodeGif(minCodeSize, data, pixelCount){
+  const clearCode = 1 << minCodeSize;
+  const eoiCode = clearCode + 1;
+  let codeSize, dict;
+  function resetDict(){
+    dict = [];
+    for(let i=0;i<clearCode;i++) dict[i]=[i];
+    dict[clearCode]=-1; dict[eoiCode]=-1;
+    codeSize = minCodeSize+1;
+  }
+  resetDict();
+  const output = new Uint8Array(pixelCount);
+  let outPos=0, bitBuf=0, bitCnt=0, bytePos=0;
+  function readCode(){
+    while(bitCnt<codeSize){
+      if(bytePos>=data.length) return eoiCode;
+      bitBuf |= data[bytePos++] << bitCnt;
+      bitCnt += 8;
+    }
+    const code = bitBuf & ((1<<codeSize)-1);
+    bitBuf >>= codeSize; bitCnt -= codeSize;
+    return code;
+  }
+  let prev=null, code;
+  while((code=readCode())!==eoiCode){
+    if(outPos>=pixelCount) break;
+    if(code===clearCode){ resetDict(); prev=null; continue; }
+    let entry;
+    if(code < dict.length && dict[code]!==-1) entry = dict[code];
+    else if(code===dict.length && prev) entry = prev.concat([prev[0]]);
+    else break;
+    for(let i=0;i<entry.length && outPos<pixelCount;i++) output[outPos++]=entry[i];
+    if(prev){
+      dict.push(prev.concat([entry[0]]));
+      if(dict.length===(1<<codeSize) && codeSize<12) codeSize++;
+    }
+    prev = entry;
+  }
+  return output;
+}
+
+function parseGifFrames(buffer){
+  let p = 0;
+  function rb(){ return buffer[p++]; }
+  function ru16(){ const v = buffer[p] | (buffer[p+1]<<8); p+=2; return v; }
+  const sig = String.fromCharCode(rb(),rb(),rb(),rb(),rb(),rb());
+  if(sig.slice(0,3)!=='GIF') throw new Error('not a gif');
+  const screenW = ru16(), screenH = ru16();
+  const packed = rb();
+  const gctFlag = !!(packed & 0x80);
+  const gctSize = 2 << (packed & 0x07);
+  rb(); rb(); // bg color index, aspect ratio
+  let gct = null;
+  if(gctFlag){ gct=[]; for(let i=0;i<gctSize;i++) gct.push([rb(),rb(),rb()]); }
+
+  const frames = [];
+  let gce = null, prevDisposal = 0, prevRect = null;
+  const baseCanvas = document.createElement('canvas');
+  baseCanvas.width = screenW; baseCanvas.height = screenH;
+  const baseCtx = baseCanvas.getContext('2d');
+
+  while(p < buffer.length){
+    const blockType = rb();
+    if(blockType === 0x21){
+      const label = rb();
+      if(label === 0xF9){
+        rb();
+        const pk = rb();
+        const delay = ru16();
+        const transIdx = rb();
+        rb();
+        gce = { disposal:(pk>>2)&7, transparent:!!(pk&1), delay:(delay||10)*10, transIdx };
+      } else {
+        let sz; while((sz=rb())!==0) p+=sz;
+      }
+    } else if(blockType === 0x2C){
+      const left=ru16(), top=ru16(), w=ru16(), h=ru16();
+      const pk = rb();
+      const lctFlag = !!(pk&0x80);
+      const interlaced = !!(pk&0x40);
+      const lctSize = 2 << (pk&0x07);
+      let lct=null;
+      if(lctFlag){ lct=[]; for(let i=0;i<lctSize;i++) lct.push([rb(),rb(),rb()]); }
+      const minCodeSize = rb();
+      let dataBytes=[]; let sz;
+      while((sz=rb())!==0){ for(let i=0;i<sz;i++) dataBytes.push(rb()); }
+      const table = lct || gct || [[0,0,0]];
+      const indices = lzwDecodeGif(minCodeSize, dataBytes, w*h);
+
+      if(prevRect && prevDisposal===2){ baseCtx.clearRect(prevRect.left, prevRect.top, prevRect.w, prevRect.h); }
+
+      let rows = [];
+      if(interlaced){
+        for(let y=0;y<h;y+=8) rows.push(y);
+        for(let y=4;y<h;y+=8) rows.push(y);
+        for(let y=2;y<h;y+=4) rows.push(y);
+        for(let y=1;y<h;y+=2) rows.push(y);
+      } else { for(let y=0;y<h;y++) rows.push(y); }
+
+      const frameImgData = baseCtx.createImageData(w,h);
+      let srcPos=0;
+      for(const y of rows){
+        for(let x=0;x<w;x++){
+          const ci = indices[srcPos++];
+          const di=(y*w+x)*4;
+          if(gce && gce.transparent && ci===gce.transIdx){ frameImgData.data[di+3]=0; }
+          else{ const c=table[ci]||[0,0,0]; frameImgData.data[di]=c[0]; frameImgData.data[di+1]=c[1]; frameImgData.data[di+2]=c[2]; frameImgData.data[di+3]=255; }
+        }
+      }
+      const tmp = document.createElement('canvas'); tmp.width=w; tmp.height=h;
+      tmp.getContext('2d').putImageData(frameImgData,0,0);
+      baseCtx.drawImage(tmp, left, top);
+
+      const snap = document.createElement('canvas'); snap.width=screenW; snap.height=screenH;
+      snap.getContext('2d').drawImage(baseCanvas,0,0);
+      frames.push({canvas:snap, delay: gce?gce.delay:100});
+
+      prevDisposal = gce ? gce.disposal : 0;
+      prevRect = {left, top, w, h};
+      gce = null;
+    } else if(blockType === 0x3B || isNaN(blockType)){ break; }
+    else { break; }
+  }
+  return frames;
+}
+
+/** Charge une image (statique ou GIF animé) et renvoie un "sprite" utilisable
+ *  avec spriteDraw() sur un canvas. Ne casse jamais : bascule sur image
+ *  statique si le décodage GIF échoue pour une raison quelconque. */
+function loadSprite(src){
+  const sprite = { complete:false, _static:null, _gifFrames:null, _gifStart:0, _gifTotal:0 };
+  if(!src) return sprite;
+  function fallbackStatic(){
+    const img = new Image();
+    img.onload = ()=>{ sprite.complete = true; };
+    img.src = src;
+    sprite._static = img;
+  }
+  if(/^data:image\/gif/i.test(src)){
+    try{
+      const b64 = src.split(',')[1];
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+      const frames = parseGifFrames(bytes);
+      if(frames && frames.length>1){
+        sprite._gifFrames = frames;
+        sprite._gifTotal = frames.reduce((s,f)=>s+f.delay,0) || frames.length*100;
+        sprite._gifStart = performance.now();
+        sprite.complete = true;
+      } else fallbackStatic();
+    }catch(e){ fallbackStatic(); }
+  } else fallbackStatic();
+  sprite.currentSource = function(){
+    if(this._gifFrames){
+      const elapsed = (performance.now() - this._gifStart) % this._gifTotal;
+      let acc=0;
+      for(const f of this._gifFrames){ acc+=f.delay; if(elapsed<acc) return f.canvas; }
+      return this._gifFrames[this._gifFrames.length-1].canvas;
+    }
+    return this._static;
+  };
+  return sprite;
+}
+function spriteDraw(ctx, sprite, x, y, w, h){
+  if(!sprite || !sprite.complete) return;
+  const src = sprite.currentSource();
+  if(src) ctx.drawImage(src, x, y, w, h);
+}
+
 function playMazeGame(area, slug, g){
   const SIZE = g.mazeSize||10, CELL=Math.min(32, Math.floor(320/SIZE));
   const W=SIZE*CELL, H=SIZE*CELL;
@@ -2729,7 +3023,7 @@ function playMazeGame(area, slug, g){
     enemies.push({x:ex,y:ey});
   }
   // chargement images
-  function loadImg(src){ if(!src) return null; const i=new Image(); i.src=src; return i; }
+  function loadImg(src){ return loadSprite(src); }
   const imgP=loadImg(g.imgPlayer), imgE=loadImg(g.imgEnemy), imgX=loadImg(g.imgExit);
   function draw(){
     ctx.clearRect(0,0,W,H);
@@ -2745,17 +3039,17 @@ function playMazeGame(area, slug, g){
     }
     // sortie
     const xp=exit.x*CELL+2, yp=exit.y*CELL+2, xs=CELL-4;
-    if(imgX&&imgX.complete) ctx.drawImage(imgX,xp,yp,xs,xs);
+    if(imgX&&imgX.complete) spriteDraw(ctx,imgX,xp,yp,xs,xs);
     else{ ctx.fillStyle='#22c55e'; ctx.fillRect(xp,yp,xs,xs); ctx.fillStyle='#fff'; ctx.font=`${xs*.7}px serif`; ctx.fillText('🚪',xp,yp+xs*.85); }
     // ennemis
     enemies.forEach(e=>{
       const ep=e.x*CELL+2, ey2=e.y*CELL+2, es=CELL-4;
-      if(imgE&&imgE.complete) ctx.drawImage(imgE,ep,ey2,es,es);
+      if(imgE&&imgE.complete) spriteDraw(ctx,imgE,ep,ey2,es,es);
       else{ ctx.fillStyle='#ef4444'; ctx.fillRect(ep,ey2,es,es); }
     });
     // joueur
     const pp=player.x*CELL+2, py2=player.y*CELL+2, ps=CELL-4;
-    if(imgP&&imgP.complete) ctx.drawImage(imgP,pp,py2,ps,ps);
+    if(imgP&&imgP.complete) spriteDraw(ctx,imgP,pp,py2,ps,ps);
     else{ ctx.fillStyle='#4f46e5'; ctx.fillRect(pp,py2,ps,ps); }
   }
   function tryMove(dx,dy){
@@ -2827,7 +3121,7 @@ function playRunnerGame(area, slug, g){
   </div>`;
   const canvas=document.getElementById('runCanvas'),ctx=canvas.getContext('2d');
   const GND=H-40;
-  function loadImg(src){ if(!src) return null; const i=new Image(); i.src=src; return i; }
+  function loadImg(src){ return loadSprite(src); }
   const imgP=loadImg(g.imgPlayer),imgO=loadImg(g.imgObstacle),imgBg=loadImg(g.imgBg);
   let player={x:50,y:GND,w:32,h:32,vy:0,onGround:true};
   let obstacles=[],score=0,speed=3,alive=true,frame=0,bgX=0;
@@ -2855,17 +3149,17 @@ function playRunnerGame(area, slug, g){
   }
   function draw(){
     ctx.clearRect(0,0,W,H);
-    if(imgBg&&imgBg.complete){ ctx.drawImage(imgBg,bgX-W,0,W,H); ctx.drawImage(imgBg,bgX,0,W,H); }
+    if(imgBg&&imgBg.complete){ spriteDraw(ctx,imgBg,bgX-W,0,W,H); spriteDraw(ctx,imgBg,bgX,0,W,H); }
     else{ ctx.fillStyle='#e0e7ff'; ctx.fillRect(0,0,W,H); }
     // sol
     ctx.fillStyle='#6b7280'; ctx.fillRect(0,GND+32,W,8);
     // obstacles
     obstacles.forEach(o=>{
-      if(imgO&&imgO.complete) ctx.drawImage(imgO,o.x,o.y,o.w,o.h);
+      if(imgO&&imgO.complete) spriteDraw(ctx,imgO,o.x,o.y,o.w,o.h);
       else{ ctx.fillStyle='#ef4444'; ctx.fillRect(o.x,o.y,o.w,o.h); }
     });
     // player
-    if(imgP&&imgP.complete) ctx.drawImage(imgP,player.x,player.y,player.w,player.h);
+    if(imgP&&imgP.complete) spriteDraw(ctx,imgP,player.x,player.y,player.w,player.h);
     else{ ctx.fillStyle='#4f46e5'; ctx.fillRect(player.x,player.y,player.w,player.h); }
     // score
     ctx.fillStyle='#1e1b4b'; ctx.font='bold 14px sans-serif'; ctx.fillText('Score : '+score,8,18);
@@ -2890,7 +3184,7 @@ function playShooterGame(area, slug, g){
     <div class="post-meta" style="margin-top:4px;">Clique dans le but pour tirer — <span id="shotInfo">${total} tirs restants</span></div>
   </div>`;
   const canvas=document.getElementById('shotCanvas'),ctx=canvas.getContext('2d');
-  function loadImg(src){ if(!src) return null; const i=new Image(); i.src=src; return i; }
+  function loadImg(src){ return loadSprite(src); }
   const imgGK=loadImg(g.imgGoalkeeper), imgSH=loadImg(g.imgShooter);
   let buts=0,tirs=0,gkX=W/2,gkDir=1,animId,locked=false;
   const GOAL={x:60,y:30,w:200,h:100}, GKW=40,GKH=50;
@@ -2905,18 +3199,17 @@ function playShooterGame(area, slug, g){
     ctx.strokeRect(GOAL.x,GOAL.y,GOAL.w,GOAL.h);
     // gardien
     const gkY=GOAL.y+GOAL.h/2-GKH/2;
-    if(imgGK&&imgGK.complete) ctx.drawImage(imgGK,gkX-GKW/2,gkY,GKW,GKH);
+    if(imgGK&&imgGK.complete) spriteDraw(ctx,imgGK,gkX-GKW/2,gkY,GKW,GKH);
     else{ ctx.fillStyle='#f97316'; ctx.fillRect(gkX-GKW/2,gkY,GKW,GKH); ctx.fillStyle='#fff'; ctx.font='20px serif'; ctx.fillText('🧤',gkX-10,gkY+GKH*.7); }
     // tireur
     const shY=H-50;
-    if(imgSH&&imgSH.complete) ctx.drawImage(imgSH,W/2-16,shY,32,40);
+    if(imgSH&&imgSH.complete) spriteDraw(ctx,imgSH,W/2-16,shY,32,40);
     else{ ctx.fillStyle='#3b82f6'; ctx.fillRect(W/2-8,shY,16,32); ctx.fillStyle='#fff'; ctx.font='20px serif'; ctx.fillText('⚽',W/2-10,shY+40); }
     ctx.fillStyle='#1e1b4b'; ctx.font='bold 13px sans-serif';
     ctx.fillText(buts+' but(s) / '+tirs+' tir(s)',8,18);
   }
-  let gkSpeed = 3;
-  function moveGK(){ gkX += gkDir * gkSpeed; if(gkX>GOAL.x+GOAL.w-GKW/2||gkX<GOAL.x+GKW/2) gkDir*=-1; drawScene(); }
-  animId=setInterval(moveGK,50);
+  function moveGK(){ gkX+=gkDir*3; if(gkX>GOAL.x+GOAL.w-GKW/2||gkX<GOAL.x+GKW/2) gkDir*=-1; drawScene(); }
+  animId=setInterval(moveGK,30);
   canvas.onclick=e=>{
     if(locked) return;
     const r=canvas.getBoundingClientRect();
@@ -2925,12 +3218,8 @@ function playShooterGame(area, slug, g){
     locked=true; tirs++;
     // gardien couvre-t-il ?
     const gkSave = Math.abs(cx-gkX)<GKW;
-    if (!gkSave) {
-  buts++;
-  gkSpeed += 0.5;
-} 
+    if(!gkSave) buts++;
     const info=document.getElementById('shotInfo');
-  
     if(info) info.textContent = (gkSave?'🧤 Arrêté !':'⚽ But !') + ' — '+(total-tirs)+' tir(s) restant(s)';
     // animation balle
     let bx=W/2,by=H-50,prog=0;
@@ -2968,7 +3257,7 @@ function playMemoryGame(area, slug, g){
     <canvas id="memCanvas" width="${W}" height="${H}" style="border:2px solid var(--border);border-radius:8px;margin-top:6px;max-width:100%;cursor:pointer;"></canvas>
   </div>`;
   const canvas=document.getElementById('memCanvas'),ctx=canvas.getContext('2d');
-  const imgs={}; cards.forEach(c=>{ if(!imgs[c.src]){ const i=new Image(); i.src=c.src; imgs[c.src]=i; }});
+  const imgs={}; cards.forEach(c=>{ if(!imgs[c.src]){ imgs[c.src]=loadSprite(c.src); }});
   let flipped=[],locked=false,start=Date.now();
   function cardPos(i){ return {x:(i%cols)*(CW+GAP), y:Math.floor(i/cols)*(CH+GAP)}; }
   function draw(){
@@ -2978,7 +3267,7 @@ function playMemoryGame(area, slug, g){
       if(c.matched){ ctx.fillStyle='#bbf7d0'; ctx.fillRect(x,y,CW,CH); return; }
       if(c.flipped){
         const img=imgs[c.src];
-        if(img&&img.complete) ctx.drawImage(img,x,y,CW,CH);
+        if(img&&img.complete) spriteDraw(ctx,img,x,y,CW,CH);
         else{ ctx.fillStyle='#e0e7ff'; ctx.fillRect(x,y,CW,CH); }
       } else {
         ctx.fillStyle='#6366f1'; ctx.fillRect(x,y,CW,CH);
@@ -3008,14 +3297,18 @@ function playMemoryGame(area, slug, g){
       },800);
     }
   };
-  draw();
+  (function loop(){
+    draw();
+    if(document.getElementById('memCanvas')) requestAnimationFrame(loop);
+  })();
 }
 
 /* ---- 5. QUI C'EST ? (SILHOUETTE) ---- */
 function playSilhouetteGame(area, slug, g){
   const qs=g.questions||[]; if(!qs.length){ area.innerHTML='<div class="empty">Aucune question configurée.</div>'; return; }
-  let idx=0,score=0,timer=null;
+  let idx=0,score=0,timer=null,activeSilRaf=null;
   function showQ(){
+    if(activeSilRaf){ cancelAnimationFrame(activeSilRaf); activeSilRaf=null; }
     if(idx>=qs.length){
       area.innerHTML=`<div style="margin-top:8px;" class="post-meta">🎉 Fin ! Score : ${score}/${qs.length}</div>`;
       submitGameScore(slug,g,score); return;
@@ -3029,14 +3322,21 @@ function playSilhouetteGame(area, slug, g){
       <button id="silOk" style="margin-top:6px;">Valider</button>
     </div>`;
     // dessine silhouette
-    const img=new Image(); img.src=q.img;
+    const sil = loadSprite(q.img);
     const canvas=document.getElementById('silCanvas'), ctx=canvas.getContext('2d');
-    img.onload=()=>{
-      ctx.drawImage(img,0,0,160,160);
-      const d=ctx.getImageData(0,0,160,160);
-      for(let i=0;i<d.data.length;i+=4){ d.data[i]=0; d.data[i+1]=0; d.data[i+2]=0; }
-      ctx.putImageData(d,0,0);
-    };
+    let silRaf;
+    function drawSilhouette(){
+      if(sil.complete){
+        ctx.clearRect(0,0,160,160);
+        spriteDraw(ctx,sil,0,0,160,160);
+        const d=ctx.getImageData(0,0,160,160);
+        for(let i=0;i<d.data.length;i+=4){ d.data[i]=0; d.data[i+1]=0; d.data[i+2]=0; }
+        ctx.putImageData(d,0,0);
+      }
+      silRaf = requestAnimationFrame(drawSilhouette);
+      activeSilRaf = silRaf;
+    }
+    drawSilhouette();
     function answer(){
       clearInterval(timer);
       const val=(document.getElementById('silInput').value||'').trim().toLowerCase();
@@ -3128,7 +3428,7 @@ function playDodgeGame(area, slug, g){
     <div class="post-meta" style="margin-top:4px;">Flèches / ZQSD ou maintiens le doigt</div>
   </div>`;
   const canvas=document.getElementById('dodgeCanvas'),ctx=canvas.getContext('2d');
-  function loadImg(src){ if(!src) return null; const i=new Image(); i.src=src; return i; }
+  function loadImg(src){ return loadSprite(src); }
   const imgP=loadImg(g.imgPlayer),imgO=loadImg(g.imgObstacle),imgBg=loadImg(g.imgBg);
   let player={x:W/2,y:H-50,w:30,h:30,vx:0,vy:0};
   let obstacles=[],dist=0,speed=2,alive=true,frame=0,bgY=0;
@@ -3162,13 +3462,13 @@ function playDodgeGame(area, slug, g){
   }
   function draw(){
     ctx.clearRect(0,0,W,H);
-    if(imgBg&&imgBg.complete){ for(let yy=-H+bgY;yy<H;yy+=H) ctx.drawImage(imgBg,0,yy,W,H); }
+    if(imgBg&&imgBg.complete){ for(let yy=-H+bgY;yy<H;yy+=H) spriteDraw(ctx,imgBg,0,yy,W,H); }
     else { ctx.fillStyle='#1e3a5f'; ctx.fillRect(0,0,W,H); }
     obstacles.forEach(o=>{
-      if(imgO&&imgO.complete) ctx.drawImage(imgO,o.x,o.y,o.w,o.h);
+      if(imgO&&imgO.complete) spriteDraw(ctx,imgO,o.x,o.y,o.w,o.h);
       else{ ctx.fillStyle='#ef4444'; ctx.fillRect(o.x,o.y,o.w,o.h); }
     });
-    if(imgP&&imgP.complete) ctx.drawImage(imgP,player.x,player.y,player.w,player.h);
+    if(imgP&&imgP.complete) spriteDraw(ctx,imgP,player.x,player.y,player.w,player.h);
     else{ ctx.fillStyle='#4f46e5'; ctx.fillRect(player.x,player.y,player.w,player.h); }
     ctx.fillStyle='#fff'; ctx.font='bold 13px sans-serif'; ctx.fillText('Distance : '+Math.floor(dist)+'m',8,18);
     if(!alive){
@@ -3209,6 +3509,189 @@ function playQuizGame(area, slug, g){
     });
   }
   showQ();
+}
+
+/* ---- 9. JEU PERSONNALISÉ ---- */
+function playCustomGame(area, slug, g){
+  const W=320, H=440;
+  const entitiesDef = g.cEntities||[];
+  if(!entitiesDef.length){ area.innerHTML='<div class="empty">Ce jeu n\'a aucun élément configuré.</div>'; return; }
+  const mode = g.cPlayerMode||'four';
+  area.innerHTML = `<div style="margin-top:8px;text-align:center;">
+    <div class="post-meta" id="cInfo">Score : 0 ${g.cLives?'❤️'.repeat(g.cLives):''}</div>
+    <canvas id="cCanvas" width="${W}" height="${H}" style="border:2px solid var(--border);border-radius:8px;margin-top:6px;max-width:100%;touch-action:none;background:#eef0f8;"></canvas>
+    <div id="cControls" style="margin-top:8px;"></div>
+  </div>`;
+  const canvas=document.getElementById('cCanvas'), ctx=canvas.getContext('2d');
+  const controls=document.getElementById('cControls');
+  const info=document.getElementById('cInfo');
+
+  const pSize=34;
+  const player={x:W/2-pSize/2, y:H-60, w:pSize, h:pSize, tx:W/2, ty:H-60};
+  const pSprite = loadSprite(g.cPlayerImg);
+  const bgSprite = g.cBg ? loadSprite(g.cBg) : null;
+  const entSprites = entitiesDef.map(e=> loadSprite(e.img));
+
+  let score=0, lives=g.cLives||0, alive=true, over=false;
+  let active=[]; // instances vivantes
+  let startMs=Date.now();
+  let keys={};
+
+  function onKey(e){ keys[e.key.toLowerCase()]=true; }
+  function onKeyUp(e){ keys[e.key.toLowerCase()]=false; }
+  window.addEventListener('keydown', onKey);
+  window.addEventListener('keyup', onKeyUp);
+
+  // Contrôles tactiles
+  if(mode==='drag'){
+    function moveTo(clientX, clientY){
+      const r=canvas.getBoundingClientRect();
+      player.tx = (clientX-r.left)*(W/r.width) - player.w/2;
+      player.ty = (clientY-r.top)*(H/r.height) - player.h/2;
+    }
+    canvas.addEventListener('pointerdown', e=>{ moveTo(e.clientX,e.clientY); });
+    canvas.addEventListener('pointermove', e=>{ if(e.buttons||e.pressure>0) moveTo(e.clientX,e.clientY); });
+  } else if(mode==='horizontal'){
+    controls.innerHTML = `<button class="secondary" id="cLeft" style="width:80px;">⬅️</button> <button class="secondary" id="cRight" style="width:80px;">➡️</button>`;
+    bindHold('cLeft','left'); bindHold('cRight','right');
+  } else { // four
+    controls.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,54px);gap:4px;justify-content:center;">
+        <span></span><button class="secondary" id="cUp">⬆️</button><span></span>
+        <button class="secondary" id="cLeft">⬅️</button><span></span><button class="secondary" id="cRight">➡️</button>
+        <span></span><button class="secondary" id="cDown">⬇️</button><span></span>
+      </div>`;
+    bindHold('cUp','up'); bindHold('cDown','down'); bindHold('cLeft','left'); bindHold('cRight','right');
+  }
+  function bindHold(id, dir){
+    const el=document.getElementById(id); if(!el) return;
+    const on=e=>{ e.preventDefault(); keys[dir]=true; };
+    const off=()=>{ keys[dir]=false; };
+    el.addEventListener('pointerdown',on); el.addEventListener('pointerup',off);
+    el.addEventListener('pointerleave',off); el.addEventListener('pointercancel',off);
+  }
+
+  const spawners = entitiesDef.map((def,i)=>({ def, sprite:entSprites[i], nextAt: Date.now()+def.rate*1000 }));
+
+  function spawn(def, sprite){
+    const size = def.size||32;
+    let inst = {def, sprite, w:size, h:size, vx:0, vy:0};
+    const speedPx = (def.speed||4) * 1.3;
+    if(def.behavior==='fall'){
+      inst.x = Math.random()*(W-size); inst.y=-size; inst.vy=speedPx;
+    } else if(def.behavior==='patrol'){
+      inst.x = Math.random()<0.5?0:W-size; inst.y = 40+Math.random()*(H-140);
+      inst.vx = inst.x<W/2 ? speedPx : -speedPx;
+    } else if(def.behavior==='chase'){
+      const edge=Math.floor(Math.random()*4);
+      if(edge===0){inst.x=Math.random()*W;inst.y=-size;}
+      else if(edge===1){inst.x=Math.random()*W;inst.y=H;}
+      else if(edge===2){inst.x=-size;inst.y=Math.random()*H;}
+      else {inst.x=W;inst.y=Math.random()*H;}
+    } else if(def.behavior==='random'){
+      inst.x=Math.random()*(W-size); inst.y=Math.random()*(H-140);
+      const a=Math.random()*Math.PI*2; inst.vx=Math.cos(a)*speedPx; inst.vy=Math.sin(a)*speedPx;
+      inst.nextTurn=Date.now()+1000+Math.random()*1500;
+    } else { // static
+      inst.x=Math.random()*(W-size); inst.y=Math.random()*(H-140);
+    }
+    active.push(inst);
+  }
+
+  function applyEffect(effect){
+    if(effect==='score1') score+=1;
+    else if(effect==='score5') score+=5;
+    else if(effect==='scoreMinus1') score=Math.max(0,score-1);
+    else if(effect==='life'){ lives=Math.max(0,lives-1); if(g.cLives && lives<=0) endGame('lose'); }
+    else if(effect==='win') endGame('win');
+    else if(effect==='lose') endGame('lose');
+  }
+
+  function endGame(status){
+    if(over) return;
+    over=true; alive=false;
+    let msg = status==='win' ? '🎉 Victoire ! Score : '+score : (status==='time' ? '⏰ Temps écoulé ! Score : '+score : '💀 Perdu ! Score : '+score);
+    if(info) info.textContent = msg;
+    submitGameScore(slug, g, score);
+  }
+
+  function update(){
+    if(over) return;
+    const spd = (g.cPlayerSpeed||5)*1.6;
+    if(mode==='drag'){
+      player.x += (player.tx-player.x)*0.18;
+      player.y += (player.ty-player.y)*0.18;
+    } else {
+      if(keys['left']||keys['arrowleft']||keys['q']||keys['a']) player.x-=spd;
+      if(keys['right']||keys['arrowright']||keys['d']) player.x+=spd;
+      if(mode==='four'){
+        if(keys['up']||keys['arrowup']||keys['z']||keys['w']) player.y-=spd;
+        if(keys['down']||keys['arrowdown']||keys['s']) player.y+=spd;
+      }
+    }
+    player.x=Math.max(0,Math.min(W-player.w,player.x));
+    player.y=Math.max(0,Math.min(H-player.h,player.y));
+
+    const now=Date.now();
+    spawners.forEach(sp=>{ if(now>=sp.nextAt){ spawn(sp.def, sp.sprite); sp.nextAt=now+sp.def.rate*1000; } });
+
+    active.forEach(inst=>{
+      if(inst.def.behavior==='chase'){
+        const cx=player.x+player.w/2, cy=player.y+player.h/2;
+        const ex=inst.x+inst.w/2, ey=inst.y+inst.h/2;
+        const dx=cx-ex, dy=cy-ey, dist=Math.hypot(dx,dy)||1;
+        const spdI=(inst.def.speed||4)*1.3;
+        inst.x += (dx/dist)*spdI; inst.y += (dy/dist)*spdI;
+      } else if(inst.def.behavior==='patrol'){
+        inst.x += inst.vx;
+        if(inst.x<=0||inst.x>=W-inst.w) inst.vx*=-1;
+      } else if(inst.def.behavior==='random'){
+        if(now>inst.nextTurn){
+          const a=Math.random()*Math.PI*2; const spdI=(inst.def.speed||4)*1.3;
+          inst.vx=Math.cos(a)*spdI; inst.vy=Math.sin(a)*spdI; inst.nextTurn=now+1000+Math.random()*1500;
+        }
+        inst.x+=inst.vx; inst.y+=inst.vy;
+        inst.x=Math.max(0,Math.min(W-inst.w,inst.x)); inst.y=Math.max(0,Math.min(H-inst.h,inst.y));
+      } else if(inst.def.behavior==='fall'){
+        inst.y += inst.vy;
+      }
+    });
+    active = active.filter(inst=> !(inst.def.behavior==='fall' && inst.y>H+40));
+
+    const hit = active.find(inst=>
+      player.x<inst.x+inst.w && player.x+player.w>inst.x &&
+      player.y<inst.y+inst.h && player.y+player.h>inst.y
+    );
+    if(hit){ active=active.filter(a=>a!==hit); applyEffect(hit.def.effect); }
+
+    if(g.cWinScore>0 && score>=g.cWinScore) endGame('win');
+    if(g.cDuration>0){
+      const left = g.cDuration - (now-startMs)/1000;
+      if(left<=0){ endGame(g.cWinScore>0?'time':'win'); }
+      else if(info) info.textContent = `Score : ${score}${g.cLives?' · '+'❤️'.repeat(lives):''} · ⏱️ ${Math.ceil(left)}s`;
+    } else if(info){
+      info.textContent = `Score : ${score}${g.cLives?' · '+'❤️'.repeat(lives):''}`;
+    }
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    if(bgSprite&&bgSprite.complete) spriteDraw(ctx,bgSprite,0,0,W,H);
+    active.forEach(inst=>{ if(inst.sprite&&inst.sprite.complete) spriteDraw(ctx,inst.sprite,inst.x,inst.y,inst.w,inst.h); else { ctx.fillStyle='#ef4444'; ctx.fillRect(inst.x,inst.y,inst.w,inst.h); } });
+    if(pSprite&&pSprite.complete) spriteDraw(ctx,pSprite,player.x,player.y,player.w,player.h);
+    else { ctx.fillStyle='#4f46e5'; ctx.fillRect(player.x,player.y,player.w,player.h); }
+  }
+
+  function cleanup(){
+    window.removeEventListener('keydown', onKey);
+    window.removeEventListener('keyup', onKeyUp);
+  }
+  function loop(){
+    update(); draw();
+    if(!over && document.getElementById('cCanvas')){ requestAnimationFrame(loop); }
+    else { cleanup(); }
+  }
+  loop();
 }
 /* ---------------- IMMERSIVE SHORT-FORM FEED ---------------- */
 function renderImmersiveFeed(container, posts, onLoadMore){
