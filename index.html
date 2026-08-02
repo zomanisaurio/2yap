@@ -1268,6 +1268,7 @@ document.getElementById('myProfileLink').onclick = (e)=>{ e.preventDefault(); lo
 window.addEventListener('hashchange', router);
 function router(){
   clearListeners();
+  if(typeof stopGameMusic==='function') stopGameMusic();
   const main = document.getElementById('main-col');
   main.innerHTML = '';
   const hash = location.hash.replace('#','');
@@ -1936,6 +1937,8 @@ function renderCreateCommunity(main){
       customCSS: buildThemeCss(primary, bgc) + '\n' + advancedCss,
       createdBy: currentUser.uid,
       members: [currentUser.uid],
+      admins: [],
+      postPermission: 'all',
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     await incrementUserStat(currentUser.uid, 'communitiesCreated', 1);
@@ -1946,6 +1949,9 @@ function renderCreateCommunity(main){
 }
 function buildThemeCss(primary, bgc){
   return `body{background:${bgc};} .post-author{color:${primary};} .post-actions button{border-color:${primary};}`;
+}
+function isCommunityAdmin(c){
+  return !!(c && currentUser && (c.createdBy===currentUser.uid || (c.admins||[]).includes(currentUser.uid)));
 }
 
 /* ---------------- HUB (lien externe intégré, join/quitter sans sortir de l'app) ---------------- */
@@ -1975,6 +1981,42 @@ function renderHub(main, slug){
 }
 
 /* ---------------- COMMUNITY SETTINGS ---------------- */
+async function loadAdminsList(slug, c){
+  const list = document.getElementById('ecAdminsList');
+  if(!list) return;
+  const members = (c.members||[]).filter(uid=> uid!==c.createdBy);
+  if(members.length===0){ list.innerHTML = '<div class="empty">Aucun autre membre pour le moment.</div>'; return; }
+  try{
+    const docs = await Promise.all(members.slice(0,60).map(uid=> db.collection('users').doc(uid).get()));
+    let admins = c.admins||[];
+    list.innerHTML = '';
+    docs.forEach(d=>{
+      if(!d.exists) return;
+      const u = d.data();
+      const isAdm = admins.includes(d.id);
+      const row = document.createElement('div');
+      row.style.display='flex'; row.style.alignItems='center'; row.style.justifyContent='space-between'; row.style.padding='6px 0'; row.style.borderBottom='1px solid var(--border)';
+      row.innerHTML = `<span>${esc(u.pseudo)}</span>`;
+      const btn = document.createElement('button');
+      btn.className = isAdm? 'danger small' : 'secondary small';
+      btn.textContent = isAdm? 'Retirer admin' : 'Nommer admin';
+      btn.onclick = async ()=>{
+        btn.disabled = true;
+        await db.collection('communities').doc(slug).update({
+          admins: isAdm
+            ? firebase.firestore.FieldValue.arrayRemove(d.id)
+            : firebase.firestore.FieldValue.arrayUnion(d.id)
+        });
+        toast(isAdm? 'Admin retiré.' : (u.pseudo+' est maintenant admin.'));
+        c.admins = isAdm ? (c.admins||[]).filter(x=>x!==d.id) : [...(c.admins||[]), d.id];
+        loadAdminsList(slug, c);
+      };
+      row.appendChild(btn);
+      list.appendChild(row);
+    });
+  }catch(e){ list.innerHTML = '<div class="empty">Erreur : '+esc(e.message)+'</div>'; }
+}
+
 function renderCommunitySettings(main, slug){
   main.innerHTML = '<div class="empty">Chargement...</div>';
   db.collection('communities').doc(slug).get().then(doc=>{
@@ -2012,6 +2054,17 @@ function renderCommunitySettings(main, slug){
           </div>
           <div class="field"><label>🔗 Lien du Hub (optionnel)</label><input id="ecHub" value="${esc(c.hubUrl||'')}" placeholder="https://..."></div>
           <div class="field">
+            <label>Qui peut publier des posts ?</label>
+            <select id="ecPostPerm">
+              <option value="all" ${c.postPermission!=='admins'?'selected':''}>Tous les membres</option>
+              <option value="admins" ${c.postPermission==='admins'?'selected':''}>Créateur et admins uniquement</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>🛡️ Admins de la communauté</label>
+            <div id="ecAdminsList"><div class="empty">Chargement des membres...</div></div>
+          </div>
+          <div class="field">
             <label>🎨 Couleurs du fil</label>
             <div class="color-field"><input type="color" id="ecColorPrimary" value="${c.themePrimary||'#4F46E5'}"><span>Couleur d'accent</span></div>
             <div class="color-field"><input type="color" id="ecColorBg" value="${c.themeBg||'#ffffff'}"><span>Fond du fil</span></div>
@@ -2032,6 +2085,7 @@ function renderCommunitySettings(main, slug){
         </div>
       </div>`;
     document.getElementById('ecCancel').onclick = ()=> location.hash = '#community/'+slug;
+    loadAdminsList(slug, c);
     document.getElementById('ecSubmit').onclick = async ()=>{
       const msg = document.getElementById('ecMsg');
       let thumb = c.thumbnail||'';
@@ -2046,6 +2100,7 @@ function renderCommunitySettings(main, slug){
           description: document.getElementById('ecDesc').value.trim(),
           thumbnail: thumb,
           hubUrl: document.getElementById('ecHub').value.trim(),
+          postPermission: document.getElementById('ecPostPerm').value,
           themePrimary: primary, themeBg: bgc, advancedCSS: advancedCss,
           customCSS: buildThemeCss(primary, bgc) + '\n' + advancedCss
         };
@@ -2081,6 +2136,8 @@ function renderCommunity(main, slug){
     if(!doc.exists){ main.innerHTML='<div class="panel"><div class="empty">Communauté introuvable.</div></div>'; return; }
     const c = doc.data();
     const isMember = (c.members||[]).includes(currentUser.uid);
+    const cAdmin = isCommunityAdmin(c);
+    const canPost = c.postPermission!=='admins' || cAdmin;
     communityTab = 'posts';
     main.innerHTML = `
       <div class="panel">
@@ -2094,7 +2151,7 @@ function renderCommunity(main, slug){
           </div>
           <div>
             ${isMember? '<button class="danger small" id="leaveBtn">Quitter</button>' : '<button class="small" id="joinBtn">Rejoindre</button>'}
-            ${isMember? '<button class="small" id="newPostBtn" style="margin-left:6px;">+ Post</button>' : ''}
+            ${isMember && canPost? '<button class="small" id="newPostBtn" style="margin-left:6px;">+ Post</button>' : ''}
             ${isMember && c.hubUrl? '<button class="secondary small" id="hubBtn" style="margin-left:6px;">🚪 Rejoindre le Hub</button>' : ''}
             ${c.createdBy===currentUser.uid? '<button class="secondary small" id="settingsBtn" style="margin-left:6px;">⚙️ Paramètres</button>' : ''}
           </div>
@@ -2102,6 +2159,7 @@ function renderCommunity(main, slug){
         <div class="comm-tabs">
           <button class="tab-posts on" data-tab="posts">Posts</button>
           <button class="tab-video" data-tab="video">🎬 Court</button>
+          <button class="tab-games" data-tab="games">🎮 Mini-jeux</button>
         </div>
         <div id="newPostArea"></div>
         <div id="communityFeed"><div class="empty">Chargement...</div></div>
@@ -2111,7 +2169,7 @@ function renderCommunity(main, slug){
       renderCommunity(main, slug);
     });
     document.getElementById('leaveBtn')?.addEventListener('click', async ()=>{
-      await db.collection('communities').doc(slug).update({members: firebase.firestore.FieldValue.arrayRemove(currentUser.uid)});
+      await db.collection('communities').doc(slug).update({members: firebase.firestore.FieldValue.arrayRemove(currentUser.uid), admins: firebase.firestore.FieldValue.arrayRemove(currentUser.uid)});
       await maybeDeleteEmptyCommunity(slug);
       location.hash = '#explore';
     });
@@ -2123,7 +2181,8 @@ function renderCommunity(main, slug){
         main.querySelectorAll('.comm-tabs button').forEach(b=>b.classList.remove('on'));
         btn.classList.add('on');
         communityTab = btn.dataset.tab;
-        listenCommunityFeed(slug, c);
+        if(communityTab==='games'){ renderCommunityGames(document.getElementById('communityFeed'), slug, c, cAdmin); }
+        else { listenCommunityFeed(slug, c); }
       };
     });
     listenCommunityFeed(slug, c);
@@ -2151,6 +2210,17 @@ function toggleNewPost(slug, c){
   if(area.innerHTML){ area.innerHTML=''; return; }
   area.innerHTML = `
     <div class="panel-body" style="border-top:1px solid var(--border);">
+      <div class="field">
+        <label>Modèle rapide (optionnel)</label>
+        <select id="npTemplate">
+          <option value="">— Aucun —</option>
+          <option value="poll">📊 Sondage</option>
+          <option value="announcement">📢 Annonce</option>
+          <option value="question">❓ Question</option>
+          <option value="review">⭐ Avis / Review</option>
+          <option value="event">🎉 Événement</option>
+        </select>
+      </div>
       <div class="field"><textarea id="npText" placeholder="Quoi de neuf ?"></textarea></div>
       <div class="field"><label>Photo, GIF ou vidéo courte (optionnel)</label><input id="npMedia" type="file" accept="video/*,image/*"></div>
       <div class="field"><label>...ou colle un lien vidéo/image directement (pas de limite de taille)</label><input id="npMediaUrl" placeholder="https://.../video.mp4"></div>
@@ -2158,6 +2228,22 @@ function toggleNewPost(slug, c){
       <div id="videoWarn"></div>
       <button id="npSubmit">Publier</button>
     </div>`;
+  const NP_TEMPLATES = {
+    poll: '📊 SONDAGE\n\nQuestion : \n\nA) \nB) \nC) \n\nVotez en commentaire !',
+    announcement: '📢 ANNONCE\n\n',
+    question: '❓ Petite question à la communauté :\n\n',
+    review: '⭐ AVIS\n\nCe que j\'ai testé : \nCe que j\'ai aimé : \nCe que j\'ai moins aimé : \nNote : /10',
+    event: '🎉 ÉVÉNEMENT\n\nQuoi : \nQuand : \nOù / lien : \n\nQui est partant ?'
+  };
+  document.getElementById('npTemplate').addEventListener('change', e=>{
+    const key = e.target.value;
+    const ta = document.getElementById('npText');
+    if(key && (!ta.value.trim() || confirm('Remplacer le texte actuel par le modèle ?'))){
+      ta.value = NP_TEMPLATES[key];
+      ta.focus();
+    }
+    e.target.value = '';
+  });
   document.getElementById('npMedia').addEventListener('change', e=>{
     const f = e.target.files[0];
     const warn = document.getElementById('videoWarn');
@@ -2292,6 +2378,838 @@ async function renderCommunityFeed(feed, posts, c){
   feed.appendChild(iframe);
 }
 
+/* ================================================================
+   MINI-JEUX DE COMMUNAUTÉ — 8 TEMPLATES AVEC IMAGES IMPORTABLES
+   ================================================================ */
+
+const GAME_TEMPLATES = {
+  maze:      { emoji:'🌀', name:'Labyrinthe',          better:'asc',  unit:'s',   desc:'Trouve la sortie le plus vite possible. Personnalise le perso, les ennemis, la durée et la taille.' },
+  runner:    { emoji:'🏃', name:'Runner',               better:'desc', unit:'pts', desc:'Cours et saute par-dessus les obstacles. Plus tu dures, plus tu marques.' },
+  shooter:   { emoji:'⚽', name:'Penalty Shootout',     better:'desc', unit:'buts',desc:'Tire dans le bon angle au bon moment. Personnalise les équipes.' },
+  memory:    { emoji:'🧠', name:'Memory',               better:'asc',  unit:'s',   desc:'Retourne les paires le plus vite possible. Importe tes propres images.' },
+  silhouette:{ emoji:'👤', name:'Qui c\'est ?',         better:'desc', unit:'pts', desc:'Devine la silhouette en moins de temps. Importe tes images.' },
+  sequence:  { emoji:'🎵', name:'Répète la séquence',   better:'desc', unit:'pts', desc:'Mémorise et reproduis la séquence de touches. Importe tes images/sons.' },
+  dodge:     { emoji:'🚗', name:'Évite les obstacles',  better:'desc', unit:'m',   desc:'Reste en vie le plus longtemps. Importe ton perso et les obstacles.' },
+  quiz:      { emoji:'❓', name:'Quiz maison',           better:'desc', unit:'pts', desc:'Questions créées par l\'admin. Images optionnelles par question.' }
+};
+
+/* ---------- INFRA COMMUNE ---------- */
+async function renderCommunityGames(container, slug, c, cAdmin){
+  if(!container) return;
+  container.innerHTML = '<div class="empty">Chargement des mini-jeux...</div>';
+  let gamesSnap;
+  try{ gamesSnap = await db.collection('communities').doc(slug).collection('games').orderBy('createdAt','desc').get(); }
+  catch(e){ container.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>'; return; }
+  const games=[]; gamesSnap.forEach(d=> games.push({id:d.id,...d.data()}));
+  container.innerHTML = `
+    <div class="panel-body" style="border-top:1px solid var(--border);">
+      ${cAdmin? '<button class="secondary small" id="addGameBtn">+ Ajouter un mini-jeu</button>':''}
+      <div id="addGameArea"></div>
+      <div id="gamesList" style="margin-top:10px;"></div>
+    </div>`;
+  const list = document.getElementById('gamesList');
+  if(!games.length){ list.innerHTML='<div class="empty">Aucun mini-jeu pour le moment.</div>'; }
+  games.forEach(g=>{
+    const tpl = GAME_TEMPLATES[g.type]||{emoji:'🎮',name:g.type};
+    const card = document.createElement('div');
+    card.className = 'game-card';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+        <b>${tpl.emoji} ${esc(g.title||tpl.name)}</b>
+        <div>
+          <button class="small" data-play="${g.id}">▶ Jouer</button>
+          ${cAdmin? `<button class="danger small" data-del="${g.id}">🗑️</button>`:''}
+        </div>
+      </div>
+      <div class="post-meta" style="margin:4px 0 6px;">${esc(g.desc||tpl.desc)}</div>
+      <div id="lb-${g.id}"></div>
+      <div id="play-${g.id}"></div>`;
+    list.appendChild(card);
+    renderGameLeaderboard(slug, g);
+  });
+  list.querySelectorAll('[data-play]').forEach(btn=>{
+    const g = games.find(x=>x.id===btn.dataset.play);
+    btn.onclick = ()=> startGamePlay(slug, g, btn);
+  });
+  list.querySelectorAll('[data-del]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      if(!confirm('Supprimer ce mini-jeu ?')) return;
+      await db.collection('communities').doc(slug).collection('games').doc(btn.dataset.del).delete();
+      renderCommunityGames(container, slug, c, cAdmin);
+    };
+  });
+  if(cAdmin) document.getElementById('addGameBtn').onclick = ()=>
+    renderAddGameForm(document.getElementById('addGameArea'), slug, ()=> renderCommunityGames(container, slug, c, cAdmin));
+}
+
+async function renderGameLeaderboard(slug, g){
+  const el = document.getElementById('lb-'+g.id); if(!el) return;
+  const tpl = GAME_TEMPLATES[g.type]||{better:'desc',unit:'pts'};
+  try{
+    const snap = await db.collection('communities').doc(slug).collection('games').doc(g.id)
+      .collection('scores').orderBy('best', tpl.better).limit(5).get();
+    if(snap.empty){ el.innerHTML='<div class="post-meta">Aucun score — sois le premier !</div>'; return; }
+    const medals = ['🥇','🥈','🥉','4.','5.'];
+    el.innerHTML = '<div class="post-meta" style="margin-bottom:2px;"><b>🏆 Top 5</b></div>'
+      + snap.docs.map((d,i)=>{ const s=d.data(); return `<div class="post-meta">${medals[i]} <b>${esc(s.pseudo)}</b> — ${s.best} ${tpl.unit}</div>`; }).join('');
+  }catch(e){ el.innerHTML=''; }
+}
+
+async function submitGameScore(slug, g, score){
+  const tpl = GAME_TEMPLATES[g.type]||{better:'desc'};
+  const ref = db.collection('communities').doc(slug).collection('games').doc(g.id).collection('scores').doc(currentUser.uid);
+  try{
+    const doc = await ref.get();
+    const prev = doc.exists ? doc.data().best : null;
+    const better = prev===null||(tpl.better==='asc'? score<prev : score>prev);
+    if(better){
+      await ref.set({uid:currentUser.uid, pseudo:currentUser.pseudo, best:score, updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+      if(prev!==null) toast('🎉 Nouveau record perso : '+score+' '+(tpl.unit||''));
+    }
+  }catch(e){ console.warn('submitGameScore',e); }
+  renderGameLeaderboard(slug, g);
+}
+
+let currentGameAudio = null;
+function stopGameMusic(){
+  if(currentGameAudio){ currentGameAudio.pause(); currentGameAudio = null; }
+}
+function startGameMusic(url){
+  stopGameMusic();
+  if(!url) return;
+  try{
+    currentGameAudio = new Audio(url);
+    currentGameAudio.loop = true;
+    currentGameAudio.volume = 0.5;
+    currentGameAudio.play().catch(()=>{});
+  }catch(e){}
+}
+
+function startGamePlay(slug, g, btn){
+  const area = document.getElementById('play-'+g.id); if(!area) return;
+  if(area.innerHTML){ area.innerHTML=''; btn.textContent='▶ Jouer'; stopGameMusic(); return; }
+  btn.textContent='⏹ Fermer';
+  startGameMusic(g.musicUrl);
+  const runners = {maze:playMazeGame, runner:playRunnerGame, shooter:playShooterGame,
+    memory:playMemoryGame, silhouette:playSilhouetteGame, sequence:playSequenceGame,
+    dodge:playDodgeGame, quiz:playQuizGame};
+  (runners[g.type]||((a)=>{ a.innerHTML='<div class="empty">Jeu inconnu.</div>'; }))(area, slug, g);
+}
+
+/* ---------- FORM DE CRÉATION ---------- */
+function renderAddGameForm(area, slug, onDone){
+  if(area.innerHTML){ area.innerHTML=''; return; }
+
+  // champs communs + champs spécifiques par type
+  area.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:8px;">
+      <div class="field"><label>Type</label>
+        <select id="agType">
+          ${Object.entries(GAME_TEMPLATES).map(([k,v])=>`<option value="${k}">${v.emoji} ${v.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Titre</label><input id="agTitle" placeholder="ex: Labyrinthe des fans"></div>
+      <div class="field"><label>Description (optionnel)</label><input id="agDesc" placeholder="Règles rapides..."></div>
+      <div class="field"><label>🎵 Musique de fond (lien direct .mp3, optionnel)</label><input id="agMusicUrl" placeholder="https://.../musique.mp3"></div>
+
+      <!-- MAZE -->
+      <div class="ag-specific" data-for="maze">
+        <div class="field"><label>Taille (cellules) : <span id="mazeSizeVal">10</span></label>
+          <input type="range" id="agMazeSize" min="6" max="20" value="10">
+        </div>
+        <div class="field"><label>Nb d'ennemis : <span id="mazeEnemyVal">2</span></label>
+          <input type="range" id="agMazeEnemies" min="0" max="8" value="2">
+        </div>
+        <div class="field"><label>Vitesse ennemis</label>
+          <select id="agMazeSpeed"><option value="slow">Lente</option><option value="normal" selected>Normale</option><option value="fast">Rapide</option></select>
+        </div>
+        <div class="field"><label>⏱️ Durée max (secondes, 0 = illimité)</label>
+          <input type="number" id="agMazeDuration" value="0" min="0" max="600">
+        </div>
+        <div class="field"><label>🖼️ Image du personnage (PNG transparent recommandé)</label><input type="file" id="agMazePlayer" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image des ennemis</label><input type="file" id="agMazeEnemy" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image de la sortie (🚪)</label><input type="file" id="agMazeExit" accept="image/*"></div>
+      </div>
+
+      <!-- RUNNER -->
+      <div class="ag-specific hidden" data-for="runner">
+        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agRunnerPlayer" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image des obstacles</label><input type="file" id="agRunnerObstacle" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agRunnerBg" accept="image/*"></div>
+      </div>
+
+      <!-- SHOOTER -->
+      <div class="ag-specific hidden" data-for="shooter">
+        <div class="field"><label>🖼️ Image gardien</label><input type="file" id="agShotGoalkeeper" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image tireur</label><input type="file" id="agShotShooter" accept="image/*"></div>
+        <div class="field"><label>Nombre de tirs</label><input type="number" id="agShotCount" value="5" min="3" max="10"></div>
+      </div>
+
+      <!-- MEMORY -->
+      <div class="ag-specific hidden" data-for="memory">
+        <div class="field"><label>🖼️ Images des cartes (importe 4 à 8 images, elles seront doublées en paires)</label>
+          <input type="file" id="agMemoryCards" accept="image/*" multiple></div>
+      </div>
+
+      <!-- SILHOUETTE -->
+      <div class="ag-specific hidden" data-for="silhouette">
+        <div class="field"><label>Questions (une par ligne : Nom | image)</label>
+          <div class="post-meta" style="margin-bottom:6px;">Format : NomDuPerso (tu importes les images juste en dessous dans l'ordre)</div>
+          <textarea id="agSilNames" placeholder="Pikachu\nNaruto\nSonic" style="min-height:80px;"></textarea>
+        </div>
+        <div class="field"><label>🖼️ Images correspondantes (dans le même ordre que les noms)</label>
+          <input type="file" id="agSilImages" accept="image/*" multiple>
+        </div>
+        <div class="field"><label>Temps par question (secondes)</label>
+          <input type="number" id="agSilTime" value="10" min="5" max="30">
+        </div>
+      </div>
+
+      <!-- SEQUENCE -->
+      <div class="ag-specific hidden" data-for="sequence">
+        <div class="field"><label>Nombre de touches dans la séquence max</label>
+          <input type="number" id="agSeqMax" value="8" min="4" max="16">
+        </div>
+        <div class="field"><label>🖼️ Images des 4 touches (dans l'ordre : Haut, Bas, Gauche, Droite)</label>
+          <input type="file" id="agSeqImages" accept="image/*" multiple>
+        </div>
+      </div>
+
+      <!-- DODGE -->
+      <div class="ag-specific hidden" data-for="dodge">
+        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agDodgePlayer" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image des obstacles</label><input type="file" id="agDodgeObstacle" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agDodgeBg" accept="image/*"></div>
+      </div>
+
+      <!-- QUIZ -->
+      <div class="ag-specific hidden" data-for="quiz">
+        <div class="field">
+          <label>Questions (une par ligne)</label>
+          <div class="post-meta" style="margin-bottom:6px;">Format : Question | Choix1 | Choix2 | Choix3 | Choix4 | n° bonne réponse (1-4)</div>
+          <textarea id="agQuizData" placeholder="Qui a marqué en finale ? | Mbappé | Messi | Ronaldo | Neymar | 1" style="min-height:100px;"></textarea>
+        </div>
+        <div class="field"><label>🖼️ Images par question (optionnel, dans l'ordre des questions)</label>
+          <input type="file" id="agQuizImages" accept="image/*" multiple>
+        </div>
+      </div>
+
+      <button id="agSubmit">Créer le mini-jeu</button>
+      <div id="agMsg" style="color:var(--red);margin-top:6px;"></div>
+    </div>`;
+
+  const typeSelect = document.getElementById('agType');
+  function showFields(type){
+    area.querySelectorAll('.ag-specific').forEach(el=>{
+      el.classList.toggle('hidden', el.dataset.for!==type);
+    });
+  }
+  typeSelect.addEventListener('change', e=> showFields(e.target.value));
+  area.querySelector('#agMazeSize').oninput = e=> document.getElementById('mazeSizeVal').textContent = e.target.value;
+  area.querySelector('#agMazeEnemies').oninput = e=> document.getElementById('mazeEnemyVal').textContent = e.target.value;
+
+  document.getElementById('agSubmit').onclick = async ()=>{
+    const type = typeSelect.value;
+    const title = document.getElementById('agTitle').value.trim();
+    const desc = document.getElementById('agDesc').value.trim();
+    const msg = document.getElementById('agMsg');
+    if(!title){ msg.textContent='Ajoute un titre.'; return; }
+    msg.textContent=''; const btn = document.getElementById('agSubmit');
+    btn.disabled=true; btn.textContent='Création...';
+
+    async function toB64(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
+    async function filesToB64(files){ const arr=[]; for(const f of Array.from(files)) arr.push(await toB64(f)); return arr; }
+
+    try{
+      const doc = {type, title, desc, createdBy:currentUser.uid, createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+      const musicUrl = document.getElementById('agMusicUrl').value.trim();
+      if(musicUrl) doc.musicUrl = musicUrl;
+      if(type==='maze'){
+        doc.mazeSize = parseInt(document.getElementById('agMazeSize').value,10);
+        doc.mazeEnemies = parseInt(document.getElementById('agMazeEnemies').value,10);
+        doc.mazeSpeed = document.getElementById('agMazeSpeed').value;
+        doc.mazeDuration = parseInt(document.getElementById('agMazeDuration').value,10) || 0;
+        const pf=document.getElementById('agMazePlayer').files[0];
+        const ef=document.getElementById('agMazeEnemy').files[0];
+        const xf=document.getElementById('agMazeExit').files[0];
+        if(pf) doc.imgPlayer = await toB64(pf);
+        if(ef) doc.imgEnemy  = await toB64(ef);
+        if(xf) doc.imgExit   = await toB64(xf);
+      } else if(type==='runner'){
+        const pf=document.getElementById('agRunnerPlayer').files[0];
+        const of=document.getElementById('agRunnerObstacle').files[0];
+        const bf=document.getElementById('agRunnerBg').files[0];
+        if(pf) doc.imgPlayer=await toB64(pf);
+        if(of) doc.imgObstacle=await toB64(of);
+        if(bf) doc.imgBg=await toB64(bf);
+      } else if(type==='shooter'){
+        const gf=document.getElementById('agShotGoalkeeper').files[0];
+        const sf=document.getElementById('agShotShooter').files[0];
+        if(gf) doc.imgGoalkeeper=await toB64(gf);
+        if(sf) doc.imgShooter=await toB64(sf);
+        doc.shotCount=parseInt(document.getElementById('agShotCount').value,10)||5;
+      } else if(type==='memory'){
+        const files=document.getElementById('agMemoryCards').files;
+        if(!files.length){ msg.textContent='Importe au moins 4 images.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        doc.cards = await filesToB64(files);
+      } else if(type==='silhouette'){
+        const names = document.getElementById('agSilNames').value.split('\n').map(s=>s.trim()).filter(Boolean);
+        const imgs = await filesToB64(document.getElementById('agSilImages').files);
+        if(!names.length||!imgs.length){ msg.textContent='Ajoute des noms et des images.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        doc.questions = names.map((n,i)=>({name:n, img:imgs[i]||imgs[0]}));
+        doc.timePerQ = parseInt(document.getElementById('agSilTime').value,10)||10;
+      } else if(type==='sequence'){
+        doc.seqMax = parseInt(document.getElementById('agSeqMax').value,10)||8;
+        doc.seqImages = await filesToB64(document.getElementById('agSeqImages').files);
+      } else if(type==='dodge'){
+        const pf=document.getElementById('agDodgePlayer').files[0];
+        const of=document.getElementById('agDodgeObstacle').files[0];
+        const bf=document.getElementById('agDodgeBg').files[0];
+        if(pf) doc.imgPlayer=await toB64(pf);
+        if(of) doc.imgObstacle=await toB64(of);
+        if(bf) doc.imgBg=await toB64(bf);
+      } else if(type==='quiz'){
+        const lines = document.getElementById('agQuizData').value.split('\n').map(l=>l.trim()).filter(Boolean);
+        const questions=[];
+        for(const l of lines){
+          const p=l.split('|').map(s=>s.trim());
+          if(p.length<6) continue;
+          questions.push({q:p[0],choices:[p[1],p[2],p[3],p[4]],correct:Math.max(0,parseInt(p[5],10)-1)});
+        }
+        if(!questions.length){ msg.textContent='Ajoute au moins une question.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        doc.questions = questions;
+        doc.quizImages = await filesToB64(document.getElementById('agQuizImages').files);
+      }
+      await db.collection('communities').doc(slug).collection('games').add(doc);
+      toast('Mini-jeu créé !');
+      area.innerHTML='';
+      onDone();
+    }catch(e){ msg.textContent='Erreur : '+e.message; btn.disabled=false; btn.textContent='Créer le mini-jeu'; }
+  };
+}
+
+/* ================================================================
+   MOTEURS DE JEU (canvas-based)
+   ================================================================ */
+
+/* ---- 1. LABYRINTHE ---- */
+function playMazeGame(area, slug, g){
+  const SIZE = g.mazeSize||10, CELL=Math.min(32, Math.floor(320/SIZE));
+  const W=SIZE*CELL, H=SIZE*CELL;
+  area.innerHTML=`<div style="margin-top:8px;text-align:center;">
+    <div id="mazeInfo" class="post-meta" style="margin-bottom:6px;">Trouve la sortie 🚪 — évite les ennemis !</div>
+    <canvas id="mazeCanvas" width="${W}" height="${H}" style="border:2px solid var(--border);border-radius:8px;touch-action:none;"></canvas>
+    <div style="margin-top:6px;" class="post-meta">Flèches / ZQSD ou swipe</div>
+  </div>`;
+  const canvas=document.getElementById('mazeCanvas'), ctx=canvas.getContext('2d');
+  // génération labyrinthe par DFS
+  const grid=[];
+  for(let y=0;y<SIZE;y++){ grid[y]=[]; for(let x=0;x<SIZE;x++) grid[y][x]={n:true,s:true,e:true,w:true,visited:false}; }
+  function carve(x,y){
+    grid[y][x].visited=true;
+    const dirs=[['n',0,-1],['s',0,1],['e',1,0],['w',-1,0]].sort(()=>Math.random()-.5);
+    for(const[d,dx,dy] of dirs){
+      const nx=x+dx,ny=y+dy;
+      if(nx<0||ny<0||nx>=SIZE||ny>=SIZE||grid[ny][nx].visited) continue;
+      grid[y][x][d]=false;
+      const opp={n:'s',s:'n',e:'w',w:'e'}[d];
+      grid[ny][nx][opp]=false;
+      carve(nx,ny);
+    }
+  }
+  carve(0,0);
+  let player={x:0,y:0}, startMs=Date.now(), alive=true;
+  const exit={x:SIZE-1,y:SIZE-1};
+  const speedMs={slow:600,normal:350,fast:180}[g.mazeSpeed||'normal'];
+  const enemies=[];
+  for(let i=0;i<(g.mazeEnemies||0);i++){
+    let ex,ey;
+    do{ ex=Math.floor(Math.random()*SIZE); ey=Math.floor(Math.random()*SIZE); }
+    while(ex===0&&ey===0 || ex===SIZE-1&&ey===SIZE-1);
+    enemies.push({x:ex,y:ey});
+  }
+  // chargement images
+  function loadImg(src){ if(!src) return null; const i=new Image(); i.src=src; return i; }
+  const imgP=loadImg(g.imgPlayer), imgE=loadImg(g.imgEnemy), imgX=loadImg(g.imgExit);
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#f5f6fa'; ctx.fillRect(0,0,W,H);
+    // cellules
+    ctx.strokeStyle='#334'; ctx.lineWidth=2;
+    for(let y=0;y<SIZE;y++) for(let x=0;x<SIZE;x++){
+      const c=grid[y][x], px=x*CELL, py=y*CELL;
+      if(c.n){ ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(px+CELL,py); ctx.stroke(); }
+      if(c.s){ ctx.beginPath(); ctx.moveTo(px,py+CELL); ctx.lineTo(px+CELL,py+CELL); ctx.stroke(); }
+      if(c.w){ ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(px,py+CELL); ctx.stroke(); }
+      if(c.e){ ctx.beginPath(); ctx.moveTo(px+CELL,py); ctx.lineTo(px+CELL,py+CELL); ctx.stroke(); }
+    }
+    // sortie
+    const xp=exit.x*CELL+2, yp=exit.y*CELL+2, xs=CELL-4;
+    if(imgX&&imgX.complete) ctx.drawImage(imgX,xp,yp,xs,xs);
+    else{ ctx.fillStyle='#22c55e'; ctx.fillRect(xp,yp,xs,xs); ctx.fillStyle='#fff'; ctx.font=`${xs*.7}px serif`; ctx.fillText('🚪',xp,yp+xs*.85); }
+    // ennemis
+    enemies.forEach(e=>{
+      const ep=e.x*CELL+2, ey2=e.y*CELL+2, es=CELL-4;
+      if(imgE&&imgE.complete) ctx.drawImage(imgE,ep,ey2,es,es);
+      else{ ctx.fillStyle='#ef4444'; ctx.fillRect(ep,ey2,es,es); }
+    });
+    // joueur
+    const pp=player.x*CELL+2, py2=player.y*CELL+2, ps=CELL-4;
+    if(imgP&&imgP.complete) ctx.drawImage(imgP,pp,py2,ps,ps);
+    else{ ctx.fillStyle='#4f46e5'; ctx.fillRect(pp,py2,ps,ps); }
+  }
+  function tryMove(dx,dy){
+    if(!alive) return;
+    const c=grid[player.y][player.x];
+    const blocked=(dx===1&&c.e)||(dx===-1&&c.w)||(dy===1&&c.s)||(dy===-1&&c.n);
+    if(blocked) return;
+    player.x+=dx; player.y+=dy;
+    checkState();
+    draw();
+  }
+  function moveEnemy(e){
+    const dirs=[[0,-1],[0,1],[1,0],[-1,0]].filter(([dx,dy])=>{
+      const c=grid[e.y][e.x];
+      return !((dx===1&&c.e)||(dx===-1&&c.w)||(dy===1&&c.s)||(dy===-1&&c.n));
+    }).sort(()=>Math.random()-.5);
+    if(dirs.length){ e.x+=dirs[0][0]; e.y+=dirs[0][1]; }
+  }
+  function checkState(){
+    if(enemies.some(e=>e.x===player.x&&e.y===player.y)){
+      alive=false;
+      document.getElementById('mazeInfo').textContent='💀 Touché par un ennemi ! Recharge pour rejouer.';
+      return;
+    }
+    if(player.x===exit.x&&player.y===exit.y){
+      alive=false;
+      const secs=Math.round((Date.now()-startMs)/1000);
+      document.getElementById('mazeInfo').textContent='🎉 Sorti en '+secs+'s !';
+      submitGameScore(slug,g,secs);
+      return;
+    }
+    if(g.mazeDuration>0){
+      const elapsed=(Date.now()-startMs)/1000;
+      const left=Math.max(0,Math.ceil(g.mazeDuration-elapsed));
+      const info=document.getElementById('mazeInfo');
+      if(info) info.textContent='⏱️ '+left+'s restantes — trouve la sortie 🚪 !';
+      if(elapsed>=g.mazeDuration){
+        alive=false;
+        if(info) info.textContent="⏰ Temps écoulé ! Recharge pour rejouer.";
+      }
+    }
+  }
+  const enemyInterval = setInterval(()=>{
+    if(!alive||!document.getElementById('mazeCanvas')){ clearInterval(enemyInterval); return; }
+    enemies.forEach(moveEnemy);
+    checkState();
+    draw();
+  }, speedMs);
+  document.addEventListener('keydown', function kh(e){
+    if(!document.getElementById('mazeCanvas')){ document.removeEventListener('keydown',kh); return; }
+    const map={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0],z:[0,-1],s:[0,1],q:[-1,0],d:[1,0],Z:[0,-1],S:[0,1],Q:[-1,0],D:[1,0]};
+    if(map[e.key]){ e.preventDefault(); tryMove(...map[e.key]); }
+  });
+  let tx=0,ty=0;
+  canvas.addEventListener('touchstart',e=>{ tx=e.touches[0].clientX; ty=e.touches[0].clientY; },{passive:true});
+  canvas.addEventListener('touchend',e=>{
+    const dx=e.changedTouches[0].clientX-tx, dy=e.changedTouches[0].clientY-ty;
+    if(Math.abs(dx)>Math.abs(dy)) tryMove(dx>0?1:-1,0); else tryMove(0,dy>0?1:-1);
+  },{passive:true});
+  draw();
+}
+
+/* ---- 2. RUNNER ---- */
+function playRunnerGame(area, slug, g){
+  const W=360,H=180;
+  area.innerHTML=`<div style="margin-top:8px;text-align:center;">
+    <canvas id="runCanvas" width="${W}" height="${H}" style="border:2px solid var(--border);border-radius:8px;touch-action:none;max-width:100%;"></canvas>
+    <div class="post-meta" style="margin-top:4px;">Espace / Tap pour sauter</div>
+  </div>`;
+  const canvas=document.getElementById('runCanvas'),ctx=canvas.getContext('2d');
+  const GND=H-40;
+  function loadImg(src){ if(!src) return null; const i=new Image(); i.src=src; return i; }
+  const imgP=loadImg(g.imgPlayer),imgO=loadImg(g.imgObstacle),imgBg=loadImg(g.imgBg);
+  let player={x:50,y:GND,w:32,h:32,vy:0,onGround:true};
+  let obstacles=[],score=0,speed=3,alive=true,frame=0,bgX=0;
+  function jump(){ if(player.onGround){ player.vy=-10; player.onGround=false; } }
+  document.addEventListener('keydown',function kh(e){ if(!document.getElementById('runCanvas')){document.removeEventListener('keydown',kh);return;} if(e.code==='Space'){e.preventDefault();jump();} });
+  canvas.addEventListener('click',jump); canvas.addEventListener('touchstart',()=>jump(),{passive:true});
+  function update(){
+    if(!alive) return;
+    frame++; score++;
+    if(frame%60===0) speed+=0.2;
+    // BG
+    bgX=(bgX-speed*.3+W)%W;
+    // player gravity
+    player.vy+=0.6; player.y+=player.vy;
+    if(player.y>=GND){ player.y=GND; player.vy=0; player.onGround=true; }
+    // spawn obstacle
+    if(frame%Math.max(50,90-score/100)===0) obstacles.push({x:W,y:GND,w:24,h:24+Math.random()*20});
+    obstacles.forEach(o=> o.x-=speed);
+    obstacles=obstacles.filter(o=>o.x>-50);
+    // collision
+    if(obstacles.some(o=> player.x+4<o.x+o.w && player.x+player.w-4>o.x && player.y+4<o.y+o.h && player.y+player.h>o.y+4)){
+      alive=false;
+      submitGameScore(slug,g,score);
+    }
+  }
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    if(imgBg&&imgBg.complete){ ctx.drawImage(imgBg,bgX-W,0,W,H); ctx.drawImage(imgBg,bgX,0,W,H); }
+    else{ ctx.fillStyle='#e0e7ff'; ctx.fillRect(0,0,W,H); }
+    // sol
+    ctx.fillStyle='#6b7280'; ctx.fillRect(0,GND+32,W,8);
+    // obstacles
+    obstacles.forEach(o=>{
+      if(imgO&&imgO.complete) ctx.drawImage(imgO,o.x,o.y,o.w,o.h);
+      else{ ctx.fillStyle='#ef4444'; ctx.fillRect(o.x,o.y,o.w,o.h); }
+    });
+    // player
+    if(imgP&&imgP.complete) ctx.drawImage(imgP,player.x,player.y,player.w,player.h);
+    else{ ctx.fillStyle='#4f46e5'; ctx.fillRect(player.x,player.y,player.w,player.h); }
+    // score
+    ctx.fillStyle='#1e1b4b'; ctx.font='bold 14px sans-serif'; ctx.fillText('Score : '+score,8,18);
+    if(!alive){
+      ctx.fillStyle='rgba(0,0,0,.5)'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#fff'; ctx.font='bold 20px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('Score final : '+score+' pts',W/2,H/2);
+      ctx.font='13px sans-serif'; ctx.fillText('Clique sur ▶ Jouer pour rejouer',W/2,H/2+24);
+      ctx.textAlign='left';
+    }
+  }
+  let raf;
+  function loop(){ draw(); if(alive) raf=requestAnimationFrame(()=>{ update(); loop(); }); }
+  loop();
+}
+
+/* ---- 3. PENALTY SHOOTOUT ---- */
+function playShooterGame(area, slug, g){
+  const W=320,H=200, total=g.shotCount||5;
+  area.innerHTML=`<div style="margin-top:8px;text-align:center;">
+    <canvas id="shotCanvas" width="${W}" height="${H}" style="border:2px solid var(--border);border-radius:8px;max-width:100%;cursor:crosshair;"></canvas>
+    <div class="post-meta" style="margin-top:4px;">Clique dans le but pour tirer — <span id="shotInfo">${total} tirs restants</span></div>
+  </div>`;
+  const canvas=document.getElementById('shotCanvas'),ctx=canvas.getContext('2d');
+  function loadImg(src){ if(!src) return null; const i=new Image(); i.src=src; return i; }
+  const imgGK=loadImg(g.imgGoalkeeper), imgSH=loadImg(g.imgShooter);
+  let buts=0,tirs=0,gkX=W/2,gkDir=1,animId,locked=false;
+  const GOAL={x:60,y:30,w:200,h:100}, GKW=40,GKH=50;
+  function drawScene(){
+    ctx.clearRect(0,0,W,H);
+    // terrain
+    ctx.fillStyle='#4ade80'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#fff'; ctx.fillRect(GOAL.x,GOAL.y,GOAL.w,GOAL.h);
+    ctx.fillStyle='#4ade80';
+    // but
+    ctx.strokeStyle='#fff'; ctx.lineWidth=3;
+    ctx.strokeRect(GOAL.x,GOAL.y,GOAL.w,GOAL.h);
+    // gardien
+    const gkY=GOAL.y+GOAL.h/2-GKH/2;
+    if(imgGK&&imgGK.complete) ctx.drawImage(imgGK,gkX-GKW/2,gkY,GKW,GKH);
+    else{ ctx.fillStyle='#f97316'; ctx.fillRect(gkX-GKW/2,gkY,GKW,GKH); ctx.fillStyle='#fff'; ctx.font='20px serif'; ctx.fillText('🧤',gkX-10,gkY+GKH*.7); }
+    // tireur
+    const shY=H-50;
+    if(imgSH&&imgSH.complete) ctx.drawImage(imgSH,W/2-16,shY,32,40);
+    else{ ctx.fillStyle='#3b82f6'; ctx.fillRect(W/2-8,shY,16,32); ctx.fillStyle='#fff'; ctx.font='20px serif'; ctx.fillText('⚽',W/2-10,shY+40); }
+    ctx.fillStyle='#1e1b4b'; ctx.font='bold 13px sans-serif';
+    ctx.fillText(buts+' but(s) / '+tirs+' tir(s)',8,18);
+  }
+  let gkSpeed = 3;
+  function moveGK(){ gkX += gkDir * gkSpeed; if(gkX>GOAL.x+GOAL.w-GKW/2||gkX<GOAL.x+GKW/2) gkDir*=-1; drawScene(); }
+  animId=setInterval(moveGK,50);
+  canvas.onclick=e=>{
+    if(locked) return;
+    const r=canvas.getBoundingClientRect();
+    const cx=(e.clientX-r.left)*(W/r.width), cy=(e.clientY-r.top)*(H/r.height);
+    if(cx<GOAL.x||cx>GOAL.x+GOAL.w||cy<GOAL.y||cy>GOAL.y+GOAL.h){ return; }
+    locked=true; tirs++;
+    // gardien couvre-t-il ?
+    const gkSave = Math.abs(cx-gkX)<GKW;
+    if (!gkSave) {
+  buts++;
+  gkSpeed += 0.5;
+} 
+    const info=document.getElementById('shotInfo');
+  
+    if(info) info.textContent = (gkSave?'🧤 Arrêté !':'⚽ But !') + ' — '+(total-tirs)+' tir(s) restant(s)';
+    // animation balle
+    let bx=W/2,by=H-50,prog=0;
+    const ballInterval=setInterval(()=>{
+      prog+=0.08; bx=W/2+(cx-W/2)*prog; by=(H-50)+(cy-(H-50))*prog;
+      drawScene(); ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(bx,by,8,0,Math.PI*2); ctx.fill();
+      if(prog>=1){
+        clearInterval(ballInterval);
+        if(tirs>=total){
+          clearInterval(animId);
+          setTimeout(()=>{
+            drawScene();
+            ctx.fillStyle='rgba(0,0,0,.5)'; ctx.fillRect(0,0,W,H);
+            ctx.fillStyle='#fff'; ctx.font='bold 20px sans-serif'; ctx.textAlign='center';
+            ctx.fillText(buts+' but(s) sur '+total+' tirs',W/2,H/2);
+            ctx.textAlign='left';
+            submitGameScore(slug,g,buts);
+          },400);
+        } else { locked=false; }
+      }
+    },16);
+  };
+  drawScene();
+}
+
+/* ---- 4. MEMORY ---- */
+function playMemoryGame(area, slug, g){
+  let cards=(g.cards||[]);
+  if(cards.length<2){ area.innerHTML='<div class="empty">Importe au moins 2 images pour jouer.</div>'; return; }
+  cards=[...cards,...cards].sort(()=>Math.random()-.5).map((src,i)=>({id:i,src,pairSrc:src,flipped:false,matched:false}));
+  const cols=Math.min(6,Math.ceil(Math.sqrt(cards.length))); const rows=Math.ceil(cards.length/cols);
+  const CW=60,CH=60,GAP=6, W=cols*(CW+GAP), H=rows*(CH+GAP);
+  area.innerHTML=`<div style="margin-top:8px;text-align:center;">
+    <div class="post-meta" id="memInfo">Retourne les paires !</div>
+    <canvas id="memCanvas" width="${W}" height="${H}" style="border:2px solid var(--border);border-radius:8px;margin-top:6px;max-width:100%;cursor:pointer;"></canvas>
+  </div>`;
+  const canvas=document.getElementById('memCanvas'),ctx=canvas.getContext('2d');
+  const imgs={}; cards.forEach(c=>{ if(!imgs[c.src]){ const i=new Image(); i.src=c.src; imgs[c.src]=i; }});
+  let flipped=[],locked=false,start=Date.now();
+  function cardPos(i){ return {x:(i%cols)*(CW+GAP), y:Math.floor(i/cols)*(CH+GAP)}; }
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    cards.forEach((c,i)=>{
+      const {x,y}=cardPos(i);
+      if(c.matched){ ctx.fillStyle='#bbf7d0'; ctx.fillRect(x,y,CW,CH); return; }
+      if(c.flipped){
+        const img=imgs[c.src];
+        if(img&&img.complete) ctx.drawImage(img,x,y,CW,CH);
+        else{ ctx.fillStyle='#e0e7ff'; ctx.fillRect(x,y,CW,CH); }
+      } else {
+        ctx.fillStyle='#6366f1'; ctx.fillRect(x,y,CW,CH);
+        ctx.fillStyle='#fff'; ctx.font='24px serif'; ctx.fillText('?',x+CW/2-7,y+CH/2+8);
+      }
+    });
+  }
+  canvas.onclick=e=>{
+    if(locked) return;
+    const r=canvas.getBoundingClientRect();
+    const mx=(e.clientX-r.left)*(W/r.width), my=(e.clientY-r.top)*(H/r.height);
+    const idx=cards.findIndex((_,i)=>{ const{x,y}=cardPos(i); return mx>x&&mx<x+CW&&my>y&&my<y+CH; });
+    if(idx<0||cards[idx].flipped||cards[idx].matched) return;
+    cards[idx].flipped=true; flipped.push(idx); draw();
+    if(flipped.length===2){
+      locked=true;
+      setTimeout(()=>{
+        if(cards[flipped[0]].pairSrc===cards[flipped[1]].pairSrc){ cards[flipped[0]].matched=cards[flipped[1]].matched=true; }
+        else { cards[flipped[0]].flipped=cards[flipped[1]].flipped=false; }
+        flipped=[]; locked=false; draw();
+        if(cards.every(c=>c.matched)){
+          const secs=Math.round((Date.now()-start)/1000);
+          const info=document.getElementById('memInfo');
+          if(info) info.textContent='🎉 Terminé en '+secs+'s !';
+          submitGameScore(slug,g,secs);
+        }
+      },800);
+    }
+  };
+  draw();
+}
+
+/* ---- 5. QUI C'EST ? (SILHOUETTE) ---- */
+function playSilhouetteGame(area, slug, g){
+  const qs=g.questions||[]; if(!qs.length){ area.innerHTML='<div class="empty">Aucune question configurée.</div>'; return; }
+  let idx=0,score=0,timer=null;
+  function showQ(){
+    if(idx>=qs.length){
+      area.innerHTML=`<div style="margin-top:8px;" class="post-meta">🎉 Fin ! Score : ${score}/${qs.length}</div>`;
+      submitGameScore(slug,g,score); return;
+    }
+    const q=qs[idx], tpq=g.timePerQ||10;
+    let timeLeft=tpq;
+    area.innerHTML=`<div style="margin-top:8px;text-align:center;">
+      <div class="post-meta" id="silTimer">⏱ ${tpq}s · Question ${idx+1}/${qs.length} · Score : ${score}</div>
+      <canvas id="silCanvas" width="160" height="160" style="border-radius:8px;margin:6px 0;"></canvas>
+      <input id="silInput" placeholder="Tape ton réponse..." style="width:100%;max-width:240px;">
+      <button id="silOk" style="margin-top:6px;">Valider</button>
+    </div>`;
+    // dessine silhouette
+    const img=new Image(); img.src=q.img;
+    const canvas=document.getElementById('silCanvas'), ctx=canvas.getContext('2d');
+    img.onload=()=>{
+      ctx.drawImage(img,0,0,160,160);
+      const d=ctx.getImageData(0,0,160,160);
+      for(let i=0;i<d.data.length;i+=4){ d.data[i]=0; d.data[i+1]=0; d.data[i+2]=0; }
+      ctx.putImageData(d,0,0);
+    };
+    function answer(){
+      clearInterval(timer);
+      const val=(document.getElementById('silInput').value||'').trim().toLowerCase();
+      if(val===q.name.toLowerCase()){ score++; toast('✅ Bonne réponse !'); }
+      else { toast('❌ C\'était : '+q.name); }
+      idx++; showQ();
+    }
+    document.getElementById('silOk').onclick=answer;
+    document.getElementById('silInput').addEventListener('keydown',e=>{ if(e.key==='Enter') answer(); });
+    timer=setInterval(()=>{
+      timeLeft--;
+      const t=document.getElementById('silTimer');
+      if(!t){ clearInterval(timer); return; }
+      t.textContent=`⏱ ${timeLeft}s · Question ${idx+1}/${qs.length} · Score : ${score}`;
+      if(timeLeft<=0){ clearInterval(timer); toast('⏰ Temps écoulé ! C\'était : '+q.name); idx++; showQ(); }
+    },1000);
+  }
+  showQ();
+}
+
+/* ---- 6. RÉPÈTE LA SÉQUENCE ---- */
+function playSequenceGame(area, slug, g){
+  const DIRS=['⬆️','⬇️','⬅️','➡️'];
+  const imgs=g.seqImages||[];
+  const maxLen=g.seqMax||8;
+  let seq=[],input=[],level=1,score=0,showing=false;
+  area.innerHTML=`<div style="margin-top:8px;text-align:center;">
+    <div class="post-meta" id="seqInfo">Observe et répète la séquence !</div>
+    <div id="seqDisplay" style="font-size:32px;min-height:48px;margin:8px 0;"></div>
+    <div id="seqBtns" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px;"></div>
+    <button id="seqStart">Démarrer</button>
+  </div>`;
+  const display=document.getElementById('seqDisplay');
+  const btns=document.getElementById('seqBtns');
+  // boutons
+  DIRS.forEach((d,i)=>{
+    const btn=document.createElement('button');
+    btn.className='secondary'; btn.style.fontSize='22px'; btn.style.width='52px'; btn.style.height='52px';
+    if(imgs[i]){ const im=document.createElement('img'); im.src=imgs[i]; im.style.width='36px'; im.style.height='36px'; btn.appendChild(im); }
+    else { btn.textContent=d; }
+    btn.onclick=()=>{ if(showing) return; checkInput(i); };
+    btns.appendChild(btn);
+  });
+  function showSeq(){
+    showing=true;
+    let i=0;
+    const info=document.getElementById('seqInfo');
+    if(info) info.textContent='Regarde bien... (niveau '+level+')';
+    const iv=setInterval(()=>{
+      if(!document.getElementById('seqDisplay')){ clearInterval(iv); return; }
+      if(i<seq.length){
+        const el=document.getElementById('seqDisplay');
+        if(el){ el.textContent=''; if(imgs[seq[i]]){ const im=document.createElement('img'); im.src=imgs[seq[i]]; im.style.height='48px'; el.appendChild(im); } else el.textContent=DIRS[seq[i]]; }
+        i++;
+      } else {
+        clearInterval(iv);
+        const el=document.getElementById('seqDisplay'); if(el) el.textContent='';
+        const info2=document.getElementById('seqInfo'); if(info2) info2.textContent='À toi !';
+        input=[]; showing=false;
+      }
+    },800);
+  }
+  function checkInput(dir){
+    input.push(dir);
+    const pos=input.length-1;
+    if(input[pos]!==seq[pos]){
+      const info=document.getElementById('seqInfo'); if(info) info.textContent='❌ Raté ! Score final : '+score;
+      submitGameScore(slug,g,score); return;
+    }
+    if(input.length===seq.length){
+      score+=level; level++;
+      if(level>maxLen){ const info=document.getElementById('seqInfo'); if(info) info.textContent='🏆 Parfait ! Score : '+score; submitGameScore(slug,g,score); return; }
+      const info=document.getElementById('seqInfo'); if(info) info.textContent='✅ Correct ! Prépare-toi...';
+      seq.push(Math.floor(Math.random()*4));
+      setTimeout(showSeq,800);
+    }
+  }
+  document.getElementById('seqStart').onclick=()=>{
+    document.getElementById('seqStart').remove();
+    seq=[Math.floor(Math.random()*4)]; showSeq();
+  };
+}
+
+/* ---- 7. DODGE (évite les obstacles, vue du dessus) ---- */
+function playDodgeGame(area, slug, g){
+  const W=320,H=240;
+  area.innerHTML=`<div style="margin-top:8px;text-align:center;">
+    <canvas id="dodgeCanvas" width="${W}" height="${H}" style="border:2px solid var(--border);border-radius:8px;max-width:100%;touch-action:none;"></canvas>
+    <div class="post-meta" style="margin-top:4px;">Flèches / ZQSD ou maintiens le doigt</div>
+  </div>`;
+  const canvas=document.getElementById('dodgeCanvas'),ctx=canvas.getContext('2d');
+  function loadImg(src){ if(!src) return null; const i=new Image(); i.src=src; return i; }
+  const imgP=loadImg(g.imgPlayer),imgO=loadImg(g.imgObstacle),imgBg=loadImg(g.imgBg);
+  let player={x:W/2,y:H-50,w:30,h:30,vx:0,vy:0};
+  let obstacles=[],dist=0,speed=2,alive=true,frame=0,bgY=0;
+  const keys={};
+  document.addEventListener('keydown',function kd(e){ if(!document.getElementById('dodgeCanvas')){document.removeEventListener('keydown',kd); document.removeEventListener('keyup',ku); return;} keys[e.key]=true; });
+  const ku=e=>{ keys[e.key]=false; };
+  document.addEventListener('keyup',ku);
+  let touchVx=0,touchVy=0;
+  canvas.addEventListener('touchstart',e=>{ const t=e.touches[0]; const r=canvas.getBoundingClientRect(); const cx=(t.clientX-r.left)*(W/r.width); const cy=(t.clientY-r.top)*(H/r.height); touchVx=Math.sign(cx-player.x)*3; touchVy=Math.sign(cy-player.y)*3; },{passive:true});
+  canvas.addEventListener('touchend',()=>{ touchVx=0; touchVy=0; },{passive:true});
+  function update(){
+    if(!alive) return;
+    frame++; dist+=speed; if(frame%200===0) speed+=0.5;
+    bgY=(bgY+speed)%H;
+    // move player
+    let vx=0,vy=0;
+    if(keys['ArrowLeft']||keys['q']||keys['Q']) vx=-4;
+    if(keys['ArrowRight']||keys['d']||keys['D']) vx=4;
+    if(keys['ArrowUp']||keys['z']||keys['Z']) vy=-4;
+    if(keys['ArrowDown']||keys['s']||keys['S']) vy=4;
+    vx=vx||touchVx; vy=vy||touchVy;
+    player.x=Math.max(0,Math.min(W-player.w,player.x+vx));
+    player.y=Math.max(0,Math.min(H-player.h,player.y+vy));
+    // spawn
+    if(frame%40===0) obstacles.push({x:Math.random()*(W-30),y:-30,w:30,h:30,vy:speed+Math.random()*2});
+    obstacles.forEach(o=>o.y+=o.vy);
+    obstacles=obstacles.filter(o=>o.y<H+40);
+    if(obstacles.some(o=> player.x<o.x+o.w&&player.x+player.w>o.x&&player.y<o.y+o.h&&player.y+player.h>o.y)){
+      alive=false; submitGameScore(slug,g,Math.floor(dist));
+    }
+  }
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    if(imgBg&&imgBg.complete){ for(let yy=-H+bgY;yy<H;yy+=H) ctx.drawImage(imgBg,0,yy,W,H); }
+    else { ctx.fillStyle='#1e3a5f'; ctx.fillRect(0,0,W,H); }
+    obstacles.forEach(o=>{
+      if(imgO&&imgO.complete) ctx.drawImage(imgO,o.x,o.y,o.w,o.h);
+      else{ ctx.fillStyle='#ef4444'; ctx.fillRect(o.x,o.y,o.w,o.h); }
+    });
+    if(imgP&&imgP.complete) ctx.drawImage(imgP,player.x,player.y,player.w,player.h);
+    else{ ctx.fillStyle='#4f46e5'; ctx.fillRect(player.x,player.y,player.w,player.h); }
+    ctx.fillStyle='#fff'; ctx.font='bold 13px sans-serif'; ctx.fillText('Distance : '+Math.floor(dist)+'m',8,18);
+    if(!alive){
+      ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('Score final : '+Math.floor(dist)+'m',W/2,H/2); ctx.textAlign='left';
+    }
+  }
+  function loop(){ draw(); if(alive) requestAnimationFrame(()=>{ update(); loop(); }); }
+  loop();
+}
+
+/* ---- 8. QUIZ MAISON ---- */
+function playQuizGame(area, slug, g){
+  const qs=g.questions||[]; if(!qs.length){ area.innerHTML='<div class="empty">Aucune question configurée.</div>'; return; }
+  const imgs=g.quizImages||[];
+  let idx=0,score=0;
+  function showQ(){
+    if(idx>=qs.length){
+      area.innerHTML=`<div style="margin-top:8px;" class="post-meta">🎉 Fin ! Score : ${score}/${qs.length}</div>`;
+      submitGameScore(slug,g,score); return;
+    }
+    const q=qs[idx];
+    area.innerHTML=`<div style="margin-top:8px;">
+      <div class="post-meta">Question ${idx+1}/${qs.length} · Score : ${score}</div>
+      ${imgs[idx]? `<img src="${imgs[idx]}" style="width:100%;max-height:140px;object-fit:contain;border-radius:8px;margin:6px 0;">`:''}
+      <div style="font-weight:bold;margin:6px 0;">${esc(q.q)}</div>
+      ${q.choices.map((ch,i)=>`<button class="secondary small" data-i="${i}" style="display:block;width:100%;text-align:left;margin-bottom:6px;">${esc(ch)}</button>`).join('')}
+    </div>`;
+    area.querySelectorAll('[data-i]').forEach(btn=>{
+      btn.onclick=()=>{
+        const chosen=parseInt(btn.dataset.i,10);
+        if(chosen===q.correct){ score++; btn.style.background='var(--primary-light)'; }
+        else{ btn.style.background='var(--red-light)'; area.querySelector(`[data-i="${q.correct}"]`).style.background='var(--primary-light)'; }
+        area.querySelectorAll('[data-i]').forEach(b=>b.disabled=true);
+        setTimeout(()=>{ idx++; showQ(); },700);
+      };
+    });
+  }
+  showQ();
+}
 /* ---------------- IMMERSIVE SHORT-FORM FEED ---------------- */
 function renderImmersiveFeed(container, posts, onLoadMore){
   if(!container) return;
