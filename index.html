@@ -2419,6 +2419,7 @@ async function renderCommunityGames(container, slug, c, cAdmin){
         <b>${tpl.emoji} ${esc(g.title||tpl.name)}</b>
         <div>
           <button class="small" data-play="${g.id}">▶ Jouer</button>
+          ${cAdmin? `<button class="secondary small" data-edit="${g.id}">✏️ Modifier</button>`:''}
           ${cAdmin? `<button class="danger small" data-del="${g.id}">🗑️</button>`:''}
         </div>
       </div>
@@ -2437,6 +2438,13 @@ async function renderCommunityGames(container, slug, c, cAdmin){
       if(!confirm('Supprimer ce mini-jeu ?')) return;
       await db.collection('communities').doc(slug).collection('games').doc(btn.dataset.del).delete();
       renderCommunityGames(container, slug, c, cAdmin);
+    };
+  });
+  list.querySelectorAll('[data-edit]').forEach(btn=>{
+    const g = games.find(x=>x.id===btn.dataset.edit);
+    btn.onclick = ()=>{
+      const editArea = document.getElementById('addGameArea');
+      renderAddGameForm(editArea, slug, ()=> renderCommunityGames(container, slug, c, cAdmin), g);
     };
   });
   if(cAdmin) document.getElementById('addGameBtn').onclick = ()=>
@@ -2498,14 +2506,15 @@ function startGamePlay(slug, g, btn){
 }
 
 /* ---------- FORM DE CRÉATION ---------- */
-function renderAddGameForm(area, slug, onDone){
-  if(area.innerHTML){ area.innerHTML=''; return; }
+function renderAddGameForm(area, slug, onDone, existingGame){
+  const isEdit = !!existingGame;
+  if(area.innerHTML && !isEdit){ area.innerHTML=''; return; }
 
   // champs communs + champs spécifiques par type
   area.innerHTML = `
     <div style="border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:8px;">
       <div class="field"><label>Type</label>
-        <select id="agType">
+        <select id="agType" ${isEdit?'disabled':''}>
           ${Object.entries(GAME_TEMPLATES).map(([k,v])=>`<option value="${k}">${v.emoji} ${v.name}</option>`).join('')}
         </select>
       </div>
@@ -2527,29 +2536,30 @@ function renderAddGameForm(area, slug, onDone){
         <div class="field"><label>⏱️ Durée max (secondes, 0 = illimité)</label>
           <input type="number" id="agMazeDuration" value="0" min="0" max="600">
         </div>
-        <div class="field"><label>🖼️ Image du personnage (PNG transparent recommandé)</label><input type="file" id="agMazePlayer" accept="image/*"></div>
-        <div class="field"><label>🖼️ Image des ennemis</label><input type="file" id="agMazeEnemy" accept="image/*"></div>
-        <div class="field"><label>🖼️ Image de la sortie (🚪)</label><input type="file" id="agMazeExit" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image du personnage (PNG transparent recommandé)</label><input type="file" id="agMazePlayer" accept="image/*"><div id="prevMazePlayer"></div></div>
+        <div class="field"><label>🖼️ Image des ennemis</label><input type="file" id="agMazeEnemy" accept="image/*"><div id="prevMazeEnemy"></div></div>
+        <div class="field"><label>🖼️ Image de la sortie (🚪)</label><input type="file" id="agMazeExit" accept="image/*"><div id="prevMazeExit"></div></div>
       </div>
 
       <!-- RUNNER -->
       <div class="ag-specific hidden" data-for="runner">
-        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agRunnerPlayer" accept="image/*"></div>
-        <div class="field"><label>🖼️ Image des obstacles</label><input type="file" id="agRunnerObstacle" accept="image/*"></div>
-        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agRunnerBg" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agRunnerPlayer" accept="image/*"><div id="prevRunnerPlayer"></div></div>
+        <div class="field"><label>🖼️ Image des obstacles</label><input type="file" id="agRunnerObstacle" accept="image/*"><div id="prevRunnerObstacle"></div></div>
+        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agRunnerBg" accept="image/*"><div id="prevRunnerBg"></div></div>
       </div>
 
       <!-- SHOOTER -->
       <div class="ag-specific hidden" data-for="shooter">
-        <div class="field"><label>🖼️ Image gardien</label><input type="file" id="agShotGoalkeeper" accept="image/*"></div>
-        <div class="field"><label>🖼️ Image tireur</label><input type="file" id="agShotShooter" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image gardien</label><input type="file" id="agShotGoalkeeper" accept="image/*"><div id="prevShotGoalkeeper"></div></div>
+        <div class="field"><label>🖼️ Image tireur</label><input type="file" id="agShotShooter" accept="image/*"><div id="prevShotShooter"></div></div>
         <div class="field"><label>Nombre de tirs</label><input type="number" id="agShotCount" value="5" min="3" max="10"></div>
       </div>
 
       <!-- MEMORY -->
       <div class="ag-specific hidden" data-for="memory">
         <div class="field"><label>🖼️ Images des cartes (importe 4 à 8 images, elles seront doublées en paires)</label>
-          <input type="file" id="agMemoryCards" accept="image/*" multiple></div>
+          <input type="file" id="agMemoryCards" accept="image/*" multiple><div id="prevMemoryCards"></div>
+          ${isEdit?'<div class="post-meta">Laisse vide pour garder les images actuelles.</div>':''}</div>
       </div>
 
       <!-- SILHOUETTE -->
@@ -2559,7 +2569,8 @@ function renderAddGameForm(area, slug, onDone){
           <textarea id="agSilNames" placeholder="Pikachu\nNaruto\nSonic" style="min-height:80px;"></textarea>
         </div>
         <div class="field"><label>🖼️ Images correspondantes (dans le même ordre que les noms)</label>
-          <input type="file" id="agSilImages" accept="image/*" multiple>
+          <input type="file" id="agSilImages" accept="image/*" multiple><div id="prevSilImages"></div>
+          ${isEdit?'<div class="post-meta">Laisse vide pour garder les images actuelles.</div>':''}
         </div>
         <div class="field"><label>Temps par question (secondes)</label>
           <input type="number" id="agSilTime" value="10" min="5" max="30">
@@ -2572,15 +2583,16 @@ function renderAddGameForm(area, slug, onDone){
           <input type="number" id="agSeqMax" value="8" min="4" max="16">
         </div>
         <div class="field"><label>🖼️ Images des 4 touches (dans l'ordre : Haut, Bas, Gauche, Droite)</label>
-          <input type="file" id="agSeqImages" accept="image/*" multiple>
+          <input type="file" id="agSeqImages" accept="image/*" multiple><div id="prevSeqImages"></div>
+          ${isEdit?'<div class="post-meta">Laisse vide pour garder les images actuelles.</div>':''}
         </div>
       </div>
 
       <!-- DODGE -->
       <div class="ag-specific hidden" data-for="dodge">
-        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agDodgePlayer" accept="image/*"></div>
-        <div class="field"><label>🖼️ Image des obstacles</label><input type="file" id="agDodgeObstacle" accept="image/*"></div>
-        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agDodgeBg" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agDodgePlayer" accept="image/*"><div id="prevDodgePlayer"></div></div>
+        <div class="field"><label>🖼️ Image des obstacles</label><input type="file" id="agDodgeObstacle" accept="image/*"><div id="prevDodgeObstacle"></div></div>
+        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agDodgeBg" accept="image/*"><div id="prevDodgeBg"></div></div>
       </div>
 
       <!-- QUIZ -->
@@ -2591,37 +2603,49 @@ function renderAddGameForm(area, slug, onDone){
           <textarea id="agQuizData" placeholder="Qui a marqué en finale ? | Mbappé | Messi | Ronaldo | Neymar | 1" style="min-height:100px;"></textarea>
         </div>
         <div class="field"><label>🖼️ Images par question (optionnel, dans l'ordre des questions)</label>
-          <input type="file" id="agQuizImages" accept="image/*" multiple>
+          <input type="file" id="agQuizImages" accept="image/*" multiple><div id="prevQuizImages"></div>
+          ${isEdit?'<div class="post-meta">Laisse vide pour garder les images actuelles.</div>':''}
         </div>
       </div>
 
       <!-- CUSTOM -->
       <div class="ag-specific hidden" data-for="custom">
         <div class="post-meta" style="margin-bottom:8px;">Ton personnage est contrôlé par le joueur. Ajoute des éléments (ennemis, bonus, pièces...) avec leur propre comportement et leur effet au contact.</div>
-        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agCPlayerImg" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image du personnage</label><input type="file" id="agCPlayerImg" accept="image/*"><div id="prevCPlayerImg"></div></div>
         <div class="field"><label>Déplacement du personnage</label>
           <select id="agCPlayerMode">
             <option value="four">4 directions (haut/bas/gauche/droite)</option>
             <option value="horizontal">Gauche / droite uniquement</option>
+            <option value="platform">Plateforme (gravité + saut)</option>
             <option value="drag">Suit le doigt / la souris</option>
           </select>
         </div>
         <div class="field"><label>Vitesse du personnage : <span id="agCSpeedVal">5</span></label>
           <input type="range" id="agCPlayerSpeed" min="2" max="10" value="5">
         </div>
+        <div class="field" id="agCShootField">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text);">
+            <input type="checkbox" id="agCCanShoot" style="width:auto;"> Le personnage peut tirer (détruit les éléments touchés, +1 pt)
+          </label>
+        </div>
         <div class="field"><label>❤️ Vies (0 = pas de système de vies)</label><input type="number" id="agCLives" value="3" min="0" max="9"></div>
         <div class="field"><label>🎯 Score à atteindre pour gagner (0 = pas de limite, on joue au score)</label><input type="number" id="agCWinScore" value="0" min="0"></div>
         <div class="field"><label>⏱️ Durée max (secondes, 0 = illimité)</label><input type="number" id="agCDuration" value="60" min="0" max="600"></div>
-        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agCBg" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image de fond (optionnel)</label><input type="file" id="agCBg" accept="image/*"><div id="prevCBg"></div></div>
 
         <div class="drawer-label" style="margin:10px 0 4px;">Éléments</div>
         <div id="agCEntities"></div>
         <button type="button" class="secondary small" id="agCAddEntity">+ Ajouter un élément</button>
       </div>
 
-      <button id="agSubmit">Créer le mini-jeu</button>
+      <button id="agSubmit">${isEdit?'Enregistrer les modifications':'Créer le mini-jeu'}</button>
+      ${isEdit?'<button type="button" class="secondary" id="agCancelEdit" style="margin-left:6px;">Annuler</button>':''}
       <div id="agMsg" style="color:var(--red);margin-top:6px;"></div>
     </div>`;
+
+  function imgPreviewHtml(b64){ return b64? `<img src="${b64}" style="max-width:70px;max-height:70px;border-radius:6px;margin-top:4px;display:block;">` : ''; }
+  function imgsPreviewHtml(arr){ return (arr&&arr.length)? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">${arr.map(b=>`<img src="${b}" style="width:44px;height:44px;object-fit:cover;border-radius:5px;">`).join('')}</div>` : ''; }
+  if(isEdit) document.getElementById('agCancelEdit').onclick = ()=>{ area.innerHTML=''; };
 
   const typeSelect = document.getElementById('agType');
   function showFields(type){
@@ -2635,7 +2659,8 @@ function renderAddGameForm(area, slug, onDone){
   area.querySelector('#agCPlayerSpeed').oninput = e=> document.getElementById('agCSpeedVal').textContent = e.target.value;
 
   let entityCount = 0;
-  function addEntityRow(){
+  const existingEntityImages = {};
+  function addEntityRow(existing){
     entityCount++;
     const id = 'ent'+entityCount;
     const row = document.createElement('div');
@@ -2648,24 +2673,28 @@ function renderAddGameForm(area, slug, onDone){
           <b>Élément ${entityCount}</b>
           <button type="button" class="danger small" data-remove>Retirer</button>
         </div>
-        <div class="field"><label>🖼️ Image</label><input type="file" id="${id}img" accept="image/*"></div>
+        <div class="field"><label>🖼️ Image ${existing?'(laisse vide pour garder l\'actuelle)':''}</label><input type="file" id="${id}img" accept="image/*">${existing?imgPreviewHtml(existing.img):''}</div>
         <div class="field"><label>Comportement</label>
           <select id="${id}behavior">
             <option value="fall">Tombe du haut vers le bas</option>
             <option value="patrol">Patrouille horizontalement</option>
             <option value="chase">Poursuit le personnage</option>
             <option value="random">Se déplace au hasard</option>
+            <option value="bounce">Rebondit sur les bords (façon DVD)</option>
+            <option value="sine">Tombe en zigzag</option>
+            <option value="orbit">Tourne en orbite sur place</option>
+            <option value="shooter">Immobile, tire des projectiles sur le personnage</option>
             <option value="static">Immobile</option>
           </select>
         </div>
-        <div class="field"><label>Vitesse : <span class="entSpeedVal">4</span></label>
-          <input type="range" id="${id}speed" min="1" max="10" value="4">
+        <div class="field"><label>Vitesse : <span class="entSpeedVal">${existing?existing.speed:4}</span></label>
+          <input type="range" id="${id}speed" min="1" max="10" value="${existing?existing.speed:4}">
         </div>
-        <div class="field"><label>Apparaît toutes les (secondes) : <span class="entRateVal">2</span></label>
-          <input type="range" id="${id}rate" min="0.3" max="6" step="0.1" value="2">
+        <div class="field"><label>Apparaît toutes les (secondes) : <span class="entRateVal">${existing?existing.rate:2}</span></label>
+          <input type="range" id="${id}rate" min="0.3" max="6" step="0.1" value="${existing?existing.rate:2}">
         </div>
-        <div class="field"><label>Taille (px) : <span class="entSizeVal">32</span></label>
-          <input type="range" id="${id}size" min="16" max="64" value="32">
+        <div class="field"><label>Taille (px) : <span class="entSizeVal">${existing?existing.size:32}</span></label>
+          <input type="range" id="${id}size" min="16" max="64" value="${existing?existing.size:32}">
         </div>
         <div class="field"><label>Effet au contact avec le personnage</label>
           <select id="${id}effect">
@@ -2673,6 +2702,9 @@ function renderAddGameForm(area, slug, onDone){
             <option value="score5">+5 points</option>
             <option value="scoreMinus1">-1 point</option>
             <option value="life">Perd une vie</option>
+            <option value="speedBoost">Bonus de vitesse (3s)</option>
+            <option value="shield">Bouclier temporaire (3s d'invincibilité)</option>
+            <option value="teleport">Téléporte le personnage ailleurs</option>
             <option value="win">Victoire immédiate</option>
             <option value="lose">Défaite immédiate</option>
           </select>
@@ -2682,19 +2714,80 @@ function renderAddGameForm(area, slug, onDone){
     row.querySelector(`#${id}speed`).oninput = e=> row.querySelector('.entSpeedVal').textContent = e.target.value;
     row.querySelector(`#${id}rate`).oninput = e=> row.querySelector('.entRateVal').textContent = e.target.value;
     row.querySelector(`#${id}size`).oninput = e=> row.querySelector('.entSizeVal').textContent = e.target.value;
+    if(existing){
+      row.querySelector(`#${id}behavior`).value = existing.behavior;
+      row.querySelector(`#${id}effect`).value = existing.effect;
+      existingEntityImages[id] = existing.img;
+    }
     document.getElementById('agCEntities').appendChild(row);
   }
-  document.getElementById('agCAddEntity').onclick = addEntityRow;
-  addEntityRow(); // au moins un élément par défaut
+  document.getElementById('agCAddEntity').onclick = ()=> addEntityRow();
+
+  // ---- Pré-remplissage en mode édition ----
+  if(isEdit){
+    typeSelect.value = existingGame.type;
+    showFields(existingGame.type);
+    document.getElementById('agTitle').value = existingGame.title||'';
+    document.getElementById('agDesc').value = existingGame.desc||'';
+    document.getElementById('agMusicUrl').value = existingGame.musicUrl||'';
+    const g = existingGame;
+    if(g.type==='maze'){
+      document.getElementById('agMazeSize').value = g.mazeSize||10; document.getElementById('mazeSizeVal').textContent = g.mazeSize||10;
+      document.getElementById('agMazeEnemies').value = g.mazeEnemies||2; document.getElementById('mazeEnemyVal').textContent = g.mazeEnemies||2;
+      document.getElementById('agMazeSpeed').value = g.mazeSpeed||'normal';
+      document.getElementById('agMazeDuration').value = g.mazeDuration||0;
+      document.getElementById('prevMazePlayer').innerHTML = imgPreviewHtml(g.imgPlayer);
+      document.getElementById('prevMazeEnemy').innerHTML = imgPreviewHtml(g.imgEnemy);
+      document.getElementById('prevMazeExit').innerHTML = imgPreviewHtml(g.imgExit);
+    } else if(g.type==='runner'){
+      document.getElementById('prevRunnerPlayer').innerHTML = imgPreviewHtml(g.imgPlayer);
+      document.getElementById('prevRunnerObstacle').innerHTML = imgPreviewHtml(g.imgObstacle);
+      document.getElementById('prevRunnerBg').innerHTML = imgPreviewHtml(g.imgBg);
+    } else if(g.type==='shooter'){
+      document.getElementById('agShotCount').value = g.shotCount||5;
+      document.getElementById('prevShotGoalkeeper').innerHTML = imgPreviewHtml(g.imgGoalkeeper);
+      document.getElementById('prevShotShooter').innerHTML = imgPreviewHtml(g.imgShooter);
+    } else if(g.type==='memory'){
+      document.getElementById('prevMemoryCards').innerHTML = imgsPreviewHtml(g.cards);
+    } else if(g.type==='silhouette'){
+      document.getElementById('agSilNames').value = (g.questions||[]).map(q=>q.name).join('\n');
+      document.getElementById('agSilTime').value = g.timePerQ||10;
+      document.getElementById('prevSilImages').innerHTML = imgsPreviewHtml((g.questions||[]).map(q=>q.img));
+    } else if(g.type==='sequence'){
+      document.getElementById('agSeqMax').value = g.seqMax||8;
+      document.getElementById('prevSeqImages').innerHTML = imgsPreviewHtml(g.seqImages);
+    } else if(g.type==='dodge'){
+      document.getElementById('prevDodgePlayer').innerHTML = imgPreviewHtml(g.imgPlayer);
+      document.getElementById('prevDodgeObstacle').innerHTML = imgPreviewHtml(g.imgObstacle);
+      document.getElementById('prevDodgeBg').innerHTML = imgPreviewHtml(g.imgBg);
+    } else if(g.type==='quiz'){
+      document.getElementById('agQuizData').value = (g.questions||[]).map(q=>`${q.q} | ${q.choices[0]} | ${q.choices[1]} | ${q.choices[2]} | ${q.choices[3]} | ${q.correct+1}`).join('\n');
+      document.getElementById('prevQuizImages').innerHTML = imgsPreviewHtml(g.quizImages);
+    } else if(g.type==='custom'){
+      document.getElementById('agCPlayerMode').value = g.cPlayerMode||'four';
+      document.getElementById('agCPlayerSpeed').value = g.cPlayerSpeed||5; document.getElementById('agCSpeedVal').textContent = g.cPlayerSpeed||5;
+      document.getElementById('agCCanShoot').checked = !!g.cCanShoot;
+      document.getElementById('agCLives').value = g.cLives||0;
+      document.getElementById('agCWinScore').value = g.cWinScore||0;
+      document.getElementById('agCDuration').value = g.cDuration||0;
+      document.getElementById('prevCPlayerImg').innerHTML = imgPreviewHtml(g.cPlayerImg);
+      document.getElementById('prevCBg').innerHTML = imgPreviewHtml(g.cBg);
+      document.getElementById('agCEntities').innerHTML = '';
+      (g.cEntities||[]).forEach(e=> addEntityRow(e));
+    }
+  } else {
+    addEntityRow(); // au moins un élément par défaut
+  }
 
   document.getElementById('agSubmit').onclick = async ()=>{
     const type = typeSelect.value;
     const title = document.getElementById('agTitle').value.trim();
     const desc = document.getElementById('agDesc').value.trim();
     const msg = document.getElementById('agMsg');
+    const submitLabel = isEdit? 'Enregistrer les modifications' : 'Créer le mini-jeu';
     if(!title){ msg.textContent='Ajoute un titre.'; return; }
     msg.textContent=''; const btn = document.getElementById('agSubmit');
-    btn.disabled=true; btn.textContent='Création...';
+    btn.disabled=true; btn.textContent= isEdit? 'Enregistrement...' : 'Création...';
 
     const GIF_LIMIT_SINGLE = 350000;  // ~350 Ko par GIF pour un slot d'image unique (perso, ennemi, fond...)
     const GIF_LIMIT_MULTI  = 130000;  // ~130 Ko par GIF quand il y en a plusieurs (memory, silhouette...)
@@ -2710,11 +2803,13 @@ function renderAddGameForm(area, slug, onDone){
       return await resizeImageBase64(file, 420, 0.75); // image statique : compressée automatiquement
     }
     async function filesToB64(files, limit){ const arr=[]; for(const f of Array.from(files)) arr.push(await toB64(f, limit)); return arr; }
+    const eg = existingGame||{};
 
     try{
-      const doc = {type, title, desc, createdBy:currentUser.uid, createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+      const doc = {type, title, desc};
+      if(!isEdit){ doc.createdBy = currentUser.uid; doc.createdAt = firebase.firestore.FieldValue.serverTimestamp(); }
       const musicUrl = document.getElementById('agMusicUrl').value.trim();
-      if(musicUrl) doc.musicUrl = musicUrl;
+      doc.musicUrl = musicUrl;
       if(type==='maze'){
         doc.mazeSize = parseInt(document.getElementById('agMazeSize').value,10);
         doc.mazeEnemies = parseInt(document.getElementById('agMazeEnemies').value,10);
@@ -2723,42 +2818,44 @@ function renderAddGameForm(area, slug, onDone){
         const pf=document.getElementById('agMazePlayer').files[0];
         const ef=document.getElementById('agMazeEnemy').files[0];
         const xf=document.getElementById('agMazeExit').files[0];
-        if(pf) doc.imgPlayer = await toB64(pf);
-        if(ef) doc.imgEnemy  = await toB64(ef);
-        if(xf) doc.imgExit   = await toB64(xf);
+        doc.imgPlayer = pf ? await toB64(pf) : (eg.imgPlayer||'');
+        doc.imgEnemy  = ef ? await toB64(ef) : (eg.imgEnemy||'');
+        doc.imgExit   = xf ? await toB64(xf) : (eg.imgExit||'');
       } else if(type==='runner'){
         const pf=document.getElementById('agRunnerPlayer').files[0];
         const of=document.getElementById('agRunnerObstacle').files[0];
         const bf=document.getElementById('agRunnerBg').files[0];
-        if(pf) doc.imgPlayer=await toB64(pf);
-        if(of) doc.imgObstacle=await toB64(of);
-        if(bf) doc.imgBg=await toB64(bf);
+        doc.imgPlayer = pf ? await toB64(pf) : (eg.imgPlayer||'');
+        doc.imgObstacle = of ? await toB64(of) : (eg.imgObstacle||'');
+        doc.imgBg = bf ? await toB64(bf) : (eg.imgBg||'');
       } else if(type==='shooter'){
         const gf=document.getElementById('agShotGoalkeeper').files[0];
         const sf=document.getElementById('agShotShooter').files[0];
-        if(gf) doc.imgGoalkeeper=await toB64(gf);
-        if(sf) doc.imgShooter=await toB64(sf);
+        doc.imgGoalkeeper = gf ? await toB64(gf) : (eg.imgGoalkeeper||'');
+        doc.imgShooter = sf ? await toB64(sf) : (eg.imgShooter||'');
         doc.shotCount=parseInt(document.getElementById('agShotCount').value,10)||5;
       } else if(type==='memory'){
         const files=document.getElementById('agMemoryCards').files;
-        if(!files.length){ msg.textContent='Importe au moins 4 images.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
-        doc.cards = await filesToB64(files, GIF_LIMIT_MULTI);
+        if(!files.length && !(eg.cards&&eg.cards.length)){ msg.textContent='Importe au moins 4 images.'; btn.disabled=false; btn.textContent=submitLabel; return; }
+        doc.cards = files.length ? await filesToB64(files, GIF_LIMIT_MULTI) : eg.cards;
       } else if(type==='silhouette'){
         const names = document.getElementById('agSilNames').value.split('\n').map(s=>s.trim()).filter(Boolean);
-        const imgs = await filesToB64(document.getElementById('agSilImages').files, GIF_LIMIT_MULTI);
-        if(!names.length||!imgs.length){ msg.textContent='Ajoute des noms et des images.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        const files = document.getElementById('agSilImages').files;
+        const imgs = files.length ? await filesToB64(files, GIF_LIMIT_MULTI) : (eg.questions||[]).map(q=>q.img);
+        if(!names.length||!imgs.length){ msg.textContent='Ajoute des noms et des images.'; btn.disabled=false; btn.textContent=submitLabel; return; }
         doc.questions = names.map((n,i)=>({name:n, img:imgs[i]||imgs[0]}));
         doc.timePerQ = parseInt(document.getElementById('agSilTime').value,10)||10;
       } else if(type==='sequence'){
         doc.seqMax = parseInt(document.getElementById('agSeqMax').value,10)||8;
-        doc.seqImages = await filesToB64(document.getElementById('agSeqImages').files, GIF_LIMIT_MULTI);
+        const files = document.getElementById('agSeqImages').files;
+        doc.seqImages = files.length ? await filesToB64(files, GIF_LIMIT_MULTI) : (eg.seqImages||[]);
       } else if(type==='dodge'){
         const pf=document.getElementById('agDodgePlayer').files[0];
         const of=document.getElementById('agDodgeObstacle').files[0];
         const bf=document.getElementById('agDodgeBg').files[0];
-        if(pf) doc.imgPlayer=await toB64(pf);
-        if(of) doc.imgObstacle=await toB64(of);
-        if(bf) doc.imgBg=await toB64(bf);
+        doc.imgPlayer = pf ? await toB64(pf) : (eg.imgPlayer||'');
+        doc.imgObstacle = of ? await toB64(of) : (eg.imgObstacle||'');
+        doc.imgBg = bf ? await toB64(bf) : (eg.imgBg||'');
       } else if(type==='quiz'){
         const lines = document.getElementById('agQuizData').value.split('\n').map(l=>l.trim()).filter(Boolean);
         const questions=[];
@@ -2767,28 +2864,31 @@ function renderAddGameForm(area, slug, onDone){
           if(p.length<6) continue;
           questions.push({q:p[0],choices:[p[1],p[2],p[3],p[4]],correct:Math.max(0,parseInt(p[5],10)-1)});
         }
-        if(!questions.length){ msg.textContent='Ajoute au moins une question.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        if(!questions.length){ msg.textContent='Ajoute au moins une question.'; btn.disabled=false; btn.textContent=submitLabel; return; }
         doc.questions = questions;
-        doc.quizImages = await filesToB64(document.getElementById('agQuizImages').files, GIF_LIMIT_MULTI);
+        const files = document.getElementById('agQuizImages').files;
+        doc.quizImages = files.length ? await filesToB64(files, GIF_LIMIT_MULTI) : (eg.quizImages||[]);
       } else if(type==='custom'){
         const pf = document.getElementById('agCPlayerImg').files[0];
-        if(pf) doc.cPlayerImg = await toB64(pf);
+        doc.cPlayerImg = pf ? await toB64(pf) : (eg.cPlayerImg||'');
         doc.cPlayerMode = document.getElementById('agCPlayerMode').value;
         doc.cPlayerSpeed = parseInt(document.getElementById('agCPlayerSpeed').value,10)||5;
+        doc.cCanShoot = document.getElementById('agCCanShoot').checked;
         doc.cLives = parseInt(document.getElementById('agCLives').value,10)||0;
         doc.cWinScore = parseInt(document.getElementById('agCWinScore').value,10)||0;
         doc.cDuration = parseInt(document.getElementById('agCDuration').value,10)||0;
         const bgf = document.getElementById('agCBg').files[0];
-        if(bgf) doc.cBg = await toB64(bgf, GIF_LIMIT_MULTI);
+        doc.cBg = bgf ? await toB64(bgf, GIF_LIMIT_MULTI) : (eg.cBg||'');
         const rows = Array.from(document.getElementById('agCEntities').children);
-        if(!rows.length){ msg.textContent='Ajoute au moins un élément.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        if(!rows.length){ msg.textContent='Ajoute au moins un élément.'; btn.disabled=false; btn.textContent=submitLabel; return; }
         const entities = [];
         for(const row of rows){
           const id = row.dataset.entId;
           const f = document.getElementById(id+'img').files[0];
-          if(!f) continue;
+          const img = f ? await toB64(f, GIF_LIMIT_MULTI) : existingEntityImages[id];
+          if(!img) continue;
           entities.push({
-            img: await toB64(f, GIF_LIMIT_MULTI),
+            img,
             behavior: document.getElementById(id+'behavior').value,
             speed: parseInt(document.getElementById(id+'speed').value,10)||4,
             rate: parseFloat(document.getElementById(id+'rate').value)||2,
@@ -2796,14 +2896,19 @@ function renderAddGameForm(area, slug, onDone){
             effect: document.getElementById(id+'effect').value
           });
         }
-        if(!entities.length){ msg.textContent='Chaque élément a besoin d\'une image.'; btn.disabled=false; btn.textContent='Créer le mini-jeu'; return; }
+        if(!entities.length){ msg.textContent='Chaque élément a besoin d\'une image.'; btn.disabled=false; btn.textContent=submitLabel; return; }
         doc.cEntities = entities;
       }
-      await db.collection('communities').doc(slug).collection('games').add(doc);
-      toast('Mini-jeu créé !');
+      if(isEdit){
+        await db.collection('communities').doc(slug).collection('games').doc(existingGame.id).update(doc);
+        toast('Mini-jeu mis à jour !');
+      } else {
+        await db.collection('communities').doc(slug).collection('games').add(doc);
+        toast('Mini-jeu créé !');
+      }
       area.innerHTML='';
       onDone();
-    }catch(e){ msg.textContent='Erreur : '+e.message; btn.disabled=false; btn.textContent='Créer le mini-jeu'; }
+    }catch(e){ msg.textContent='Erreur : '+e.message; btn.disabled=false; btn.textContent=submitLabel; }
   };
 }
 
@@ -3517,27 +3622,39 @@ function playCustomGame(area, slug, g){
   const entitiesDef = g.cEntities||[];
   if(!entitiesDef.length){ area.innerHTML='<div class="empty">Ce jeu n\'a aucun élément configuré.</div>'; return; }
   const mode = g.cPlayerMode||'four';
+  const canShoot = !!g.cCanShoot;
   area.innerHTML = `<div style="margin-top:8px;text-align:center;">
     <div class="post-meta" id="cInfo">Score : 0 ${g.cLives?'❤️'.repeat(g.cLives):''}</div>
     <canvas id="cCanvas" width="${W}" height="${H}" style="border:2px solid var(--border);border-radius:8px;margin-top:6px;max-width:100%;touch-action:none;background:#eef0f8;"></canvas>
-    <div id="cControls" style="margin-top:8px;"></div>
+    <div id="cControls" style="margin-top:8px;display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;"></div>
   </div>`;
   const canvas=document.getElementById('cCanvas'), ctx=canvas.getContext('2d');
   const controls=document.getElementById('cControls');
   const info=document.getElementById('cInfo');
 
   const pSize=34;
-  const player={x:W/2-pSize/2, y:H-60, w:pSize, h:pSize, tx:W/2, ty:H-60};
+  const GROUND_Y = H-pSize;
+  const player={
+    x:W/2-pSize/2, y: mode==='platform'?GROUND_Y:H-60, w:pSize, h:pSize,
+    tx:W/2, ty:H-60, vy:0, grounded:true,
+    speedMult:1, speedBoostUntil:0, shieldUntil:0
+  };
   const pSprite = loadSprite(g.cPlayerImg);
   const bgSprite = g.cBg ? loadSprite(g.cBg) : null;
   const entSprites = entitiesDef.map(e=> loadSprite(e.img));
 
-  let score=0, lives=g.cLives||0, alive=true, over=false;
-  let active=[]; // instances vivantes
+  let score=0, lives=g.cLives||0, over=false;
+  let active=[]; // instances vivantes (ennemis + projectiles)
   let startMs=Date.now();
   let keys={};
 
-  function onKey(e){ keys[e.key.toLowerCase()]=true; }
+  function onKey(e){
+    keys[e.key.toLowerCase()]=true;
+    if(mode==='platform' && (e.key===' '||e.key.toLowerCase()==='w'||e.key==='ArrowUp') && player.grounded){
+      player.vy=-11.5; player.grounded=false;
+    }
+    if(canShoot && e.key===' ') fireShot();
+  }
   function onKeyUp(e){ keys[e.key.toLowerCase()]=false; }
   window.addEventListener('keydown', onKey);
   window.addEventListener('keyup', onKeyUp);
@@ -3551,6 +3668,13 @@ function playCustomGame(area, slug, g){
     }
     canvas.addEventListener('pointerdown', e=>{ moveTo(e.clientX,e.clientY); });
     canvas.addEventListener('pointermove', e=>{ if(e.buttons||e.pressure>0) moveTo(e.clientX,e.clientY); });
+  } else if(mode==='platform'){
+    controls.innerHTML = `<button class="secondary" id="cLeft" style="width:70px;">⬅️</button>
+      <button class="secondary" id="cJump" style="width:80px;">⬆️ Saut</button>
+      <button class="secondary" id="cRight" style="width:70px;">➡️</button>`;
+    bindHold('cLeft','left'); bindHold('cRight','right');
+    const jb=document.getElementById('cJump');
+    jb.addEventListener('pointerdown', e=>{ e.preventDefault(); if(player.grounded){ player.vy=-11.5; player.grounded=false; } });
   } else if(mode==='horizontal'){
     controls.innerHTML = `<button class="secondary" id="cLeft" style="width:80px;">⬅️</button> <button class="secondary" id="cRight" style="width:80px;">➡️</button>`;
     bindHold('cLeft','left'); bindHold('cRight','right');
@@ -3563,12 +3687,24 @@ function playCustomGame(area, slug, g){
       </div>`;
     bindHold('cUp','up'); bindHold('cDown','down'); bindHold('cLeft','left'); bindHold('cRight','right');
   }
+  if(canShoot){
+    const shootBtn=document.createElement('button');
+    shootBtn.textContent='🔫 Tirer'; shootBtn.className='secondary';
+    shootBtn.addEventListener('pointerdown', e=>{ e.preventDefault(); fireShot(); });
+    controls.appendChild(shootBtn);
+  }
   function bindHold(id, dir){
     const el=document.getElementById(id); if(!el) return;
     const on=e=>{ e.preventDefault(); keys[dir]=true; };
     const off=()=>{ keys[dir]=false; };
     el.addEventListener('pointerdown',on); el.addEventListener('pointerup',off);
     el.addEventListener('pointerleave',off); el.addEventListener('pointercancel',off);
+  }
+
+  let projectiles=[]; // tirs du joueur
+  function fireShot(){
+    if(over) return;
+    projectiles.push({x:player.x+player.w/2-3, y:player.y, w:6, h:14, vy:-9});
   }
 
   const spawners = entitiesDef.map((def,i)=>({ def, sprite:entSprites[i], nextAt: Date.now()+def.rate*1000 }));
@@ -3579,9 +3715,20 @@ function playCustomGame(area, slug, g){
     const speedPx = (def.speed||4) * 1.3;
     if(def.behavior==='fall'){
       inst.x = Math.random()*(W-size); inst.y=-size; inst.vy=speedPx;
+    } else if(def.behavior==='sine'){
+      inst.x = Math.random()*(W-size); inst.y=-size; inst.vy=speedPx; inst.baseX=inst.x; inst.phase=Math.random()*Math.PI*2;
     } else if(def.behavior==='patrol'){
       inst.x = Math.random()<0.5?0:W-size; inst.y = 40+Math.random()*(H-140);
       inst.vx = inst.x<W/2 ? speedPx : -speedPx;
+    } else if(def.behavior==='bounce'){
+      inst.x=Math.random()*(W-size); inst.y=Math.random()*(H-140);
+      const a=Math.random()*Math.PI*2; inst.vx=Math.cos(a)*speedPx; inst.vy=Math.sin(a)*speedPx;
+    } else if(def.behavior==='orbit'){
+      inst.cx=W/2; inst.cy=H/2-40; inst.radius=40+Math.random()*70; inst.angle=Math.random()*Math.PI*2;
+      inst.angSpeed=(def.speed||4)*0.02;
+      inst.x=inst.cx+Math.cos(inst.angle)*inst.radius-size/2; inst.y=inst.cy+Math.sin(inst.angle)*inst.radius-size/2;
+    } else if(def.behavior==='shooter'){
+      inst.x=Math.random()*(W-size); inst.y=40+Math.random()*(H-200); inst.nextFire=Date.now()+1000+Math.random()*800;
     } else if(def.behavior==='chase'){
       const edge=Math.floor(Math.random()*4);
       if(edge===0){inst.x=Math.random()*W;inst.y=-size;}
@@ -3599,17 +3746,21 @@ function playCustomGame(area, slug, g){
   }
 
   function applyEffect(effect){
+    const shielded = Date.now() < player.shieldUntil;
     if(effect==='score1') score+=1;
     else if(effect==='score5') score+=5;
     else if(effect==='scoreMinus1') score=Math.max(0,score-1);
-    else if(effect==='life'){ lives=Math.max(0,lives-1); if(g.cLives && lives<=0) endGame('lose'); }
+    else if(effect==='life'){ if(!shielded){ lives=Math.max(0,lives-1); if(g.cLives && lives<=0) endGame('lose'); } }
+    else if(effect==='speedBoost'){ player.speedMult=1.8; player.speedBoostUntil=Date.now()+3000; }
+    else if(effect==='shield'){ player.shieldUntil=Date.now()+3000; }
+    else if(effect==='teleport'){ player.x=Math.random()*(W-player.w); player.y = mode==='platform'? player.y : Math.random()*(H-player.h); }
     else if(effect==='win') endGame('win');
-    else if(effect==='lose') endGame('lose');
+    else if(effect==='lose'){ if(!shielded) endGame('lose'); }
   }
 
   function endGame(status){
     if(over) return;
-    over=true; alive=false;
+    over=true;
     let msg = status==='win' ? '🎉 Victoire ! Score : '+score : (status==='time' ? '⏰ Temps écoulé ! Score : '+score : '💀 Perdu ! Score : '+score);
     if(info) info.textContent = msg;
     submitGameScore(slug, g, score);
@@ -3617,10 +3768,19 @@ function playCustomGame(area, slug, g){
 
   function update(){
     if(over) return;
-    const spd = (g.cPlayerSpeed||5)*1.6;
+    const now=Date.now();
+    if(now>player.speedBoostUntil) player.speedMult=1;
+    const spd = (g.cPlayerSpeed||5)*1.6*player.speedMult;
+
     if(mode==='drag'){
       player.x += (player.tx-player.x)*0.18;
       player.y += (player.ty-player.y)*0.18;
+    } else if(mode==='platform'){
+      if(keys['left']||keys['arrowleft']||keys['q']||keys['a']) player.x-=spd;
+      if(keys['right']||keys['arrowright']||keys['d']) player.x+=spd;
+      player.vy += 0.6; // gravité
+      player.y += player.vy;
+      if(player.y>=GROUND_Y){ player.y=GROUND_Y; player.vy=0; player.grounded=true; }
     } else {
       if(keys['left']||keys['arrowleft']||keys['q']||keys['a']) player.x-=spd;
       if(keys['right']||keys['arrowright']||keys['d']) player.x+=spd;
@@ -3630,33 +3790,75 @@ function playCustomGame(area, slug, g){
       }
     }
     player.x=Math.max(0,Math.min(W-player.w,player.x));
-    player.y=Math.max(0,Math.min(H-player.h,player.y));
+    if(mode!=='platform') player.y=Math.max(0,Math.min(H-player.h,player.y));
 
-    const now=Date.now();
     spawners.forEach(sp=>{ if(now>=sp.nextAt){ spawn(sp.def, sp.sprite); sp.nextAt=now+sp.def.rate*1000; } });
 
     active.forEach(inst=>{
-      if(inst.def.behavior==='chase'){
+      const def=inst.def;
+      if(def.behavior==='chase'){
         const cx=player.x+player.w/2, cy=player.y+player.h/2;
         const ex=inst.x+inst.w/2, ey=inst.y+inst.h/2;
         const dx=cx-ex, dy=cy-ey, dist=Math.hypot(dx,dy)||1;
-        const spdI=(inst.def.speed||4)*1.3;
+        const spdI=(def.speed||4)*1.3;
         inst.x += (dx/dist)*spdI; inst.y += (dy/dist)*spdI;
-      } else if(inst.def.behavior==='patrol'){
+      } else if(def.behavior==='patrol'){
         inst.x += inst.vx;
         if(inst.x<=0||inst.x>=W-inst.w) inst.vx*=-1;
-      } else if(inst.def.behavior==='random'){
+      } else if(def.behavior==='bounce'){
+        inst.x += inst.vx; inst.y += inst.vy;
+        if(inst.x<=0||inst.x>=W-inst.w) inst.vx*=-1;
+        if(inst.y<=0||inst.y>=H-inst.h) inst.vy*=-1;
+      } else if(def.behavior==='orbit'){
+        inst.angle += inst.angSpeed;
+        inst.x = inst.cx+Math.cos(inst.angle)*inst.radius-inst.w/2;
+        inst.y = inst.cy+Math.sin(inst.angle)*inst.radius-inst.h/2;
+      } else if(def.behavior==='sine'){
+        inst.y += inst.vy;
+        inst.x = inst.baseX + Math.sin(inst.phase + inst.y*0.03)*40;
+      } else if(def.behavior==='shooter'){
+        if(now>=inst.nextFire){
+          const ex=inst.x+inst.w/2, ey=inst.y+inst.h/2;
+          const cx=player.x+player.w/2, cy=player.y+player.h/2;
+          const dx=cx-ex, dy=cy-ey, dist=Math.hypot(dx,dy)||1;
+          const spdI=(def.speed||4)*1.2;
+          active.push({def:{behavior:'projectileMove', effect:def.effect}, sprite:inst.sprite, w:12, h:12,
+            x:ex-6, y:ey-6, vx:(dx/dist)*spdI, vy:(dy/dist)*spdI, isProjectile:true});
+          inst.nextFire = now+1400+Math.random()*600;
+        }
+      } else if(def.behavior==='projectileMove'){
+        inst.x+=inst.vx; inst.y+=inst.vy;
+      } else if(def.behavior==='random'){
         if(now>inst.nextTurn){
-          const a=Math.random()*Math.PI*2; const spdI=(inst.def.speed||4)*1.3;
+          const a=Math.random()*Math.PI*2; const spdI=(def.speed||4)*1.3;
           inst.vx=Math.cos(a)*spdI; inst.vy=Math.sin(a)*spdI; inst.nextTurn=now+1000+Math.random()*1500;
         }
         inst.x+=inst.vx; inst.y+=inst.vy;
         inst.x=Math.max(0,Math.min(W-inst.w,inst.x)); inst.y=Math.max(0,Math.min(H-inst.h,inst.y));
-      } else if(inst.def.behavior==='fall'){
+      } else if(def.behavior==='fall'){
         inst.y += inst.vy;
       }
     });
-    active = active.filter(inst=> !(inst.def.behavior==='fall' && inst.y>H+40));
+    active = active.filter(inst=>
+      !((inst.def.behavior==='fall'||inst.def.behavior==='sine') && inst.y>H+40) &&
+      !(inst.def.behavior==='projectileMove' && (inst.x<-30||inst.x>W+30||inst.y<-30||inst.y>H+30))
+    );
+
+    // tirs du joueur détruisent les éléments (pas les projectiles ennemis)
+    if(projectiles.length){
+      projectiles.forEach(p=> p.y += p.vy);
+      projectiles = projectiles.filter(p=> p.y > -20);
+      for(const p of projectiles){
+        const target = active.find(inst=> !inst.isProjectile &&
+          p.x<inst.x+inst.w && p.x+p.w>inst.x && p.y<inst.y+inst.h && p.y+p.h>inst.y);
+        if(target){
+          active = active.filter(a=>a!==target);
+          p.y = -999; // consomme le tir
+          score += 1;
+        }
+      }
+      projectiles = projectiles.filter(p=> p.y > -100);
+    }
 
     const hit = active.find(inst=>
       player.x<inst.x+inst.w && player.x+player.w>inst.x &&
@@ -3668,16 +3870,19 @@ function playCustomGame(area, slug, g){
     if(g.cDuration>0){
       const left = g.cDuration - (now-startMs)/1000;
       if(left<=0){ endGame(g.cWinScore>0?'time':'win'); }
-      else if(info) info.textContent = `Score : ${score}${g.cLives?' · '+'❤️'.repeat(lives):''} · ⏱️ ${Math.ceil(left)}s`;
+      else if(info) info.textContent = `Score : ${score}${g.cLives?' · '+'❤️'.repeat(lives):''}${Date.now()<player.shieldUntil?' · 🛡️':''} · ⏱️ ${Math.ceil(left)}s`;
     } else if(info){
-      info.textContent = `Score : ${score}${g.cLives?' · '+'❤️'.repeat(lives):''}`;
+      info.textContent = `Score : ${score}${g.cLives?' · '+'❤️'.repeat(lives):''}${Date.now()<player.shieldUntil?' · 🛡️':''}`;
     }
   }
 
   function draw(){
     ctx.clearRect(0,0,W,H);
     if(bgSprite&&bgSprite.complete) spriteDraw(ctx,bgSprite,0,0,W,H);
-    active.forEach(inst=>{ if(inst.sprite&&inst.sprite.complete) spriteDraw(ctx,inst.sprite,inst.x,inst.y,inst.w,inst.h); else { ctx.fillStyle='#ef4444'; ctx.fillRect(inst.x,inst.y,inst.w,inst.h); } });
+    if(mode==='platform'){ ctx.fillStyle='#94a3b8'; ctx.fillRect(0,GROUND_Y+pSize-4,W,4); }
+    active.forEach(inst=>{ if(inst.sprite&&inst.sprite.complete) spriteDraw(ctx,inst.sprite,inst.x,inst.y,inst.w,inst.h); else { ctx.fillStyle= inst.isProjectile?'#f97316':'#ef4444'; ctx.fillRect(inst.x,inst.y,inst.w,inst.h); } });
+    projectiles.forEach(p=>{ ctx.fillStyle='#4f46e5'; ctx.fillRect(p.x,p.y,p.w,p.h); });
+    if(Date.now()<player.shieldUntil){ ctx.strokeStyle='#22c55e'; ctx.lineWidth=3; ctx.strokeRect(player.x-3,player.y-3,player.w+6,player.h+6); }
     if(pSprite&&pSprite.complete) spriteDraw(ctx,pSprite,player.x,player.y,player.w,player.h);
     else { ctx.fillStyle='#4f46e5'; ctx.fillRect(player.x,player.y,player.w,player.h); }
   }
