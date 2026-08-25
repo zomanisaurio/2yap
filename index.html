@@ -490,6 +490,7 @@
     <a class="navlink" id="myProfileLink" data-nav href="#profile"><span class="ic">👤</span> Mon profil</a>
     <a class="navlink" data-nav href="#support"><span class="ic">🆘</span> Support</a>
     <a class="navlink hidden" id="adminLink" data-nav href="#admin"><span class="ic">🛡️</span> Admin</a>
+    <a class="navlink hidden" id="botsLink" data-nav href="#bots"><span class="ic">🤖</span> Bots</a>
   </div>
   <hr>
   <div class="drawer-label">Mes communautés</div>
@@ -863,10 +864,10 @@ function resizeImageBase64(file, maxW=500, quality=0.72){
         c.getContext('2d').drawImage(img,0,0,c.width,c.height);
         res(c.toDataURL('image/jpeg', quality));
       };
-      img.onerror = rej;
+      img.onerror = ()=> rej(new Error('Impossible de lire cette image (fichier corrompu ou format non supporté).'));
       img.src = e.target.result;
     };
-    reader.onerror = rej;
+    reader.onerror = ()=> rej(new Error('Impossible de lire ce fichier.'));
     reader.readAsDataURL(file);
   });
 }
@@ -1188,7 +1189,7 @@ async function deleteComment(commentId){
       await batch.commit();
     }
     await db.collection('posts').doc(postId).collection('comments').doc(commentId).delete();
-  }catch(err){ toast('Erreur : '+err.message); }
+  }catch(err){ toast('Erreur : '+(err.message||'erreur inconnue')); }
 }
 function closeComments(){
   document.getElementById('commentsOverlay').classList.remove('open');
@@ -1347,7 +1348,7 @@ document.getElementById('reportSubmitBtn').onclick = async ()=>{
     closeReport();
   }catch(err){
     msg.style.color='var(--red)';
-    msg.textContent = 'Erreur : '+err.message;
+    msg.textContent = 'Erreur : '+(err.message||'erreur inconnue');
   }
 };
 
@@ -1413,7 +1414,7 @@ function translateErr(e){
   if(c.includes('invalid-email')) return 'Email invalide.';
   if(c.includes('wrong-password') || c.includes('user-not-found') || c.includes('invalid-credential')) return 'Email ou mot de passe incorrect.';
   if(c.includes('weak-password')) return 'Mot de passe trop faible.';
-  return 'Erreur : '+e.message;
+  return 'Erreur : '+(e.message||'erreur inconnue');
 }
 
 auth.onAuthStateChanged(async user=>{
@@ -1445,6 +1446,7 @@ auth.onAuthStateChanged(async user=>{
     document.getElementById('layout').classList.remove('hidden');
     updateTopbarAvatar();
     document.getElementById('adminLink').classList.toggle('hidden', !isAdmin());
+    document.getElementById('botsLink').classList.toggle('hidden', !isAdmin());
     listenMyCommunities();
     listenNotifications();
     listenUserStatus(user.uid);
@@ -1488,6 +1490,7 @@ function router(){
   else if(route==='hub'){ renderHub(main, arg); }
   else if(route==='community-settings'){ renderCommunitySettings(main, arg); }
   else if(route==='admin'){ renderAdmin(main); }
+  else if(route==='bots'){ renderBots(main); }
   else if(route==='people'){ renderPeople(main); }
   else if(route==='gif-packs'){ renderGifPacks(main); }
   else if(route==='leaderboard'){ renderLeaderboard(main); }
@@ -1763,7 +1766,7 @@ async function deletePost(postId){
     toast('Post supprimé.');
   }catch(err){
     playSound('error');
-    toast('Erreur : '+err.message);
+    toast('Erreur : '+(err.message||'erreur inconnue'));
   }
 }
 
@@ -1956,7 +1959,7 @@ function renderSupport(main){
       await auth.sendPasswordResetEmail(currentUser.email);
       toast('E-mail de réinitialisation envoyé à '+currentUser.email);
     }catch(err){
-      toast('Erreur : '+err.message);
+      toast('Erreur : '+(err.message||'erreur inconnue'));
     }
     btn.disabled = false;
   };
@@ -2319,7 +2322,7 @@ function renderCommunitySettings(main, slug){
         await db.collection('communities').doc(slug).update(update);
         toast('Paramètres enregistrés.');
         location.hash = '#community/'+slug;
-      }catch(err){ msg.textContent = 'Erreur : '+err.message; }
+      }catch(err){ msg.textContent = 'Erreur : '+(err.message||'erreur inconnue'); }
     };
     document.getElementById('ecDelete').onclick = async ()=>{
       if(!confirm('Supprimer définitivement y/'+c.slug+' et tous ses posts ? Cette action est irréversible.')) return;
@@ -2331,7 +2334,7 @@ function renderCommunitySettings(main, slug){
         await db.collection('communities').doc(slug).delete();
         toast('Communauté supprimée.');
         location.hash = '#explore';
-      }catch(err){ toast('Erreur : '+err.message); }
+      }catch(err){ toast('Erreur : '+(err.message||'erreur inconnue')); }
     };
   });
 }
@@ -2568,7 +2571,7 @@ function toggleNewAudioPost(slug, c){
       evaluateBadges(currentUser.uid);
       area.innerHTML=''; playSound('publish'); toast('Audio publié ! +'+yGain+' Yappers 🪙');
     }catch(err){
-      warn.style.color='var(--red)'; warn.textContent='Erreur : '+err.message;
+      warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue');
       btn.disabled=false; btn.textContent="Publier l'audio";
     }
   };
@@ -2840,7 +2843,7 @@ function renderAddMovieForm(area, slug, onDone){
       toast('Film publié !');
       area.innerHTML='';
       onDone();
-    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+err.message; btn.disabled=false; btn.textContent='Publier le film'; }
+    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue'); btn.disabled=false; btn.textContent='Publier le film'; }
   };
 }
 
@@ -2873,7 +2876,7 @@ function renderAddSeriesForm(area, slug, onCreated){
       area.innerHTML='';
       const doc = await ref.get();
       onCreated({id:ref.id, ...doc.data()});
-    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+err.message; btn.disabled=false; btn.textContent='Créer la série'; }
+    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue'); btn.disabled=false; btn.textContent='Créer la série'; }
   };
 }
 
@@ -3000,7 +3003,7 @@ function renderAddEpisodeForm(container, slug, c, cAdmin, m, sIdx){
       toast('Épisode ajouté !');
       const doc = await db.collection('communities').doc(slug).collection('media').doc(m.id).get();
       renderSeriesDetail(container, slug, c, cAdmin, {id:m.id, ...doc.data()});
-    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+err.message; btn.disabled=false; btn.textContent="Ajouter l'épisode"; }
+    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue'); btn.disabled=false; btn.textContent="Ajouter l'épisode"; }
   };
 }
 
@@ -3451,7 +3454,7 @@ function renderAddGameForm(area, slug, onDone){
       toast('Mini-jeu créé !');
       area.innerHTML='';
       onDone();
-    }catch(e){ msg.textContent='Erreur : '+e.message; btn.disabled=false; btn.textContent='Créer le mini-jeu'; }
+    }catch(e){ msg.textContent='Erreur : '+(e.message||'erreur inconnue'); btn.disabled=false; btn.textContent='Créer le mini-jeu'; }
   };
 }
 
@@ -4523,6 +4526,144 @@ function renderAdmin(main){
   });
 }
 
+/* ---------------- BOTS (admin) ---------------- */
+function renderBots(main){
+  if(!isAdmin()){
+    main.innerHTML = '<div class="panel"><div class="empty">Accès réservé aux administrateurs.</div></div>';
+    return;
+  }
+  main.innerHTML = `
+    <div class="panel">
+      <div class="panel-head">🤖 Créer un bot</div>
+      <div class="panel-body">
+        <div class="field"><label>Nom du bot</label><input id="botPseudo" placeholder="ex: 2Yap News"></div>
+        <div class="field"><label>Bio (optionnel)</label><input id="botBio" placeholder="Petite description..."></div>
+        <div class="field"><label>🖼️ Avatar (optionnel)</label><input type="file" id="botAvatar" accept="image/*"></div>
+        <button id="botCreateBtn">Créer le bot</button>
+        <div id="botMsg" class="post-meta"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">Mes bots</div>
+      <div class="panel-body" id="botsList"><div class="empty">Chargement...</div></div>
+    </div>
+    <div id="botPostArea"></div>`;
+
+  document.getElementById('botCreateBtn').onclick = async ()=>{
+    const pseudo = document.getElementById('botPseudo').value.trim();
+    const msg = document.getElementById('botMsg');
+    if(pseudo.length<2){ msg.style.color='var(--red)'; msg.textContent='Donne un nom au bot.'; return; }
+    const btn = document.getElementById('botCreateBtn');
+    btn.disabled=true; btn.textContent='Création...';
+    msg.style.color='var(--text-mute)';
+    try{
+      let avatar='';
+      const f = document.getElementById('botAvatar').files[0];
+      if(f) avatar = await resizeImageBase64(f, 200, 0.75);
+      await db.collection('users').add({
+        pseudo, bio: document.getElementById('botBio').value.trim(), avatar,
+        isBot:true, createdByAdmin: currentUser.uid,
+        following:[], followers:[], yappers:0,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      toast('Bot créé !');
+      renderBots(main);
+    }catch(err){ msg.style.color='var(--red)'; msg.textContent='Erreur : '+(err.message||'erreur inconnue'); btn.disabled=false; btn.textContent='Créer le bot'; }
+  };
+
+  db.collection('users').where('isBot','==',true).get().then(snap=>{
+    const list = document.getElementById('botsList');
+    if(!list) return;
+    if(snap.empty){ list.innerHTML = '<div class="empty">Aucun bot pour le moment.</div>'; return; }
+    list.innerHTML = '';
+    snap.forEach(d=>{
+      const bot = {id:d.id, ...d.data()};
+      const row = document.createElement('div');
+      row.className = 'friend-row';
+      row.innerHTML = `
+        <img class="avatar" src="${bot.avatar||fallbackAvatar()}">
+        <div style="flex:1;"><b>${esc(bot.pseudo)}</b><div class="post-meta">${esc(bot.bio||'')}</div></div>
+        <button class="small" data-post="${bot.id}">📤 Publier</button>
+        <button class="danger small" data-del="${bot.id}" style="margin-left:6px;">🗑️</button>`;
+      row.querySelector('[data-post]').onclick = e=>{ e.stopPropagation(); renderBotPostForm(document.getElementById('botPostArea'), bot); };
+      row.querySelector('[data-del]').onclick = async e=>{
+        e.stopPropagation();
+        if(!confirm('Supprimer le bot '+bot.pseudo+' ? (ses posts existants resteront visibles)')) return;
+        await db.collection('users').doc(bot.id).delete();
+        renderBots(main);
+      };
+      list.appendChild(row);
+    });
+  }).catch(err=>{
+    const list = document.getElementById('botsList');
+    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message||'erreur inconnue')+'</div>';
+  });
+}
+
+function renderBotPostForm(area, bot){
+  area.innerHTML = `
+    <div class="panel" style="margin-top:8px;">
+      <div class="panel-head">Publier en tant que ${esc(bot.pseudo)}</div>
+      <div class="panel-body">
+        <div class="field"><label>Communauté</label><select id="bpCommunity"><option value="">Chargement...</option></select></div>
+        <div class="field"><label>Texte</label><textarea id="bpText" placeholder="Quoi de neuf ?"></textarea></div>
+        <div class="field"><label>🖼️🎥 Média (optionnel)</label><input type="file" id="bpMedia" accept="image/*,video/*"></div>
+        <div class="field"><label>...ou lien (YouTube, vidéo directe, image)</label><input id="bpUrl" placeholder="https://..."></div>
+        <div id="bpWarn" class="post-meta"></div>
+        <button id="bpSubmit">Publier</button>
+        <button type="button" class="secondary" id="bpCancel" style="margin-left:6px;">Annuler</button>
+      </div>
+    </div>`;
+  document.getElementById('bpCancel').onclick = ()=> area.innerHTML='';
+  db.collection('communities').get().then(snap=>{
+    const sel = document.getElementById('bpCommunity');
+    if(!sel) return;
+    if(snap.empty){ sel.innerHTML = '<option value="">Aucune communauté</option>'; return; }
+    sel.innerHTML = '<option value="">Choisis une communauté...</option>';
+    snap.forEach(d=>{
+      const opt = document.createElement('option');
+      opt.value = d.id; opt.textContent = 'y/'+d.data().slug;
+      sel.appendChild(opt);
+    });
+  });
+  document.getElementById('bpSubmit').onclick = async ()=>{
+    const slug = document.getElementById('bpCommunity').value;
+    const text = document.getElementById('bpText').value.trim();
+    const file = document.getElementById('bpMedia').files[0];
+    const urlInput = document.getElementById('bpUrl').value.trim();
+    const warn = document.getElementById('bpWarn');
+    if(!slug){ warn.style.color='var(--red)'; warn.textContent='Choisis une communauté.'; return; }
+    if(!text && !file && !urlInput){ warn.style.color='var(--red)'; warn.textContent='Ajoute du texte ou un média.'; return; }
+    const btn = document.getElementById('bpSubmit');
+    btn.disabled=true; btn.textContent='Publication...';
+    warn.style.color='var(--text-mute)';
+    try{
+      let mediaUrl='', mediaType='', mediaStoragePath='', videoType='', videoId='';
+      if(urlInput){
+        const src = detectMediaSource(urlInput);
+        mediaUrl=urlInput; mediaType=src.mediaType; videoType=src.videoType; videoId=src.videoId||'';
+      } else if(file){
+        const res = await prepareMediaForUpload(file, status=>{ warn.textContent=status; });
+        mediaUrl=res.mediaUrl; mediaStoragePath=res.mediaStoragePath; mediaType=res.mediaType;
+        videoType = mediaType==='video' ? 'mp4' : '';
+      }
+      const commDoc = await db.collection('communities').doc(slug).get();
+      await db.collection('posts').add({
+        communityId: slug, communitySlug: commDoc.data().slug,
+        authorUid: bot.id, authorPseudo: bot.pseudo, authorAvatar: bot.avatar||'',
+        text, mediaUrl, mediaStoragePath, mediaType, videoType, videoId, musicUrl:'', isBotPost:true,
+        likes:[], dislikes:[],
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      toast('Publié en tant que '+bot.pseudo+' !');
+      area.innerHTML='';
+    }catch(err){
+      warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue');
+      btn.disabled=false; btn.textContent='Publier';
+    }
+  };
+}
+
 /* ---------------- PROFILE ---------------- */
 function renderProfile(main, uid){
   main.innerHTML = '<div class="empty">Chargement...</div>';
@@ -4604,7 +4745,9 @@ function renderProfile(main, uid){
         <div class="panel-body" id="userPosts"><div class="empty">Chargement...</div></div>
       </div>`;
     const actions = document.getElementById('profileActions');
-    if(!isMe){
+    if(u.isBot){
+      actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
+    } else if(!isMe){
       const btn = document.createElement('button');
       btn.textContent = iFollow ? 'Ne plus suivre' : 'Suivre';
       btn.className = iFollow ? 'secondary' : '';
