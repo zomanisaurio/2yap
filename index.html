@@ -547,6 +547,10 @@
         <div class="field"><label>Pseudo</label><input id="suPseudo" maxlength="20"></div>
         <div class="field"><label>Email</label><input id="suEmail" type="email"></div>
         <div class="field"><label>Mot de passe</label><input id="suPass" type="password"></div>
+        <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+          <input type="checkbox" id="suAnon" style="width:auto;">
+          <label for="suAnon" style="margin:0;">🥷 Compte anonyme (personne ne peut te suivre, et tu ne peux suivre personne)</label>
+        </div>
         <button id="signupBtn" style="width:100%">Créer mon compte</button>
       </div>
       <div id="authMsg"></div>
@@ -1405,6 +1409,7 @@ document.getElementById('signupBtn').onclick = async ()=>{
   const pseudo = document.getElementById('suPseudo').value.trim();
   const email = document.getElementById('suEmail').value.trim();
   const pass = document.getElementById('suPass').value;
+  const isAnon = document.getElementById('suAnon').checked;
   const msgEl = document.getElementById('authMsg');
   msgEl.textContent='';
   if(pseudo.length<3){ msgEl.textContent='Pseudo trop court (min 3).'; return; }
@@ -1413,7 +1418,7 @@ document.getElementById('signupBtn').onclick = async ()=>{
     const cred = await auth.createUserWithEmailAndPassword(email, pass);
     await db.collection('users').doc(cred.user.uid).set({
       pseudo, email, bio:'', avatar:'', following:[], followers:[], yappers:0,
-      profileBgColor:'', profileBgUrl:'',
+      profileBgColor:'', profileBgUrl:'', isAnon,
       postsCount:0, commentsCount:0, communitiesCreated:0, livesStarted:0, badges:['welcome'],
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -4710,7 +4715,7 @@ function renderProfile(main, uid){
         <div class="profile-head" style="${bannerStyle}">
           <img class="avatar lg" src="${u.avatar||fallbackAvatar()}">
           <div>
-            <div style="font-size:17px;font-weight:bold;color:var(--text);">${esc(u.pseudo)}</div>
+            <div style="font-size:17px;font-weight:bold;color:var(--text);">${esc(u.pseudo)} ${u.isAnon? '<span class="ybadge">🥷 Anonyme</span>' : ''}</div>
             <div class="post-meta">${esc(u.bio||'')}</div>
             <div class="profile-stats">
               <span><b>${(u.followers||[]).length}</b> abonnés</span>
@@ -4768,7 +4773,11 @@ function renderProfile(main, uid){
       </div>`;
     const actions = document.getElementById('profileActions');
     if(u.isBot){
-      actions.innerHTML = '<span class="ybadge">🤖 Bot</span>';
+      actions.innerHTML = '<span class="ybadge"🥷 Anonyme </span>';
+    } else if(u.isAnon){
+      actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
+    } else if(currentUser.isAnon && !isMe){
+      actions.innerHTML = '<span class="ybadge">🥷 Compte anonyme — impossible de suivre</span>';
     } else if(!isMe){
       const btn = document.createElement('button');
       btn.textContent = iFollow ? 'Ne plus suivre' : 'Suivre';
@@ -5512,4 +5521,4 @@ function renderLiveRoom(main, codeRaw){
 }
 </script>
 </body>
-</html>
+</html>s
