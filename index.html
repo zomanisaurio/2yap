@@ -941,8 +941,57 @@ function compressVideoFile(file, opts){
   });
 }
 
-const MEDIA_BASE64_LIMIT = 880000; // ancien plafond (conservé pour la lecture d'anciens posts en base64)
-const MAX_UPLOAD_BYTES = 200*1024*1024; // 200 Mo, garde-fou d'upload
+const MEDIA_BASE64_LIMIT = 700000; // taille max qu'on garde inline dans le doc du post (marge sous la limite ~1MiB de Firestore)
+const MEDIA_MAX_TOTAL = 15000000;  // taille max totale autorisée pour un média de post (au-delà, refusé même fragmenté)
+const MEDIA_CHUNK_SIZE = 650000;   // taille de chaque fragment quand on découpe un média volumineux
+const MAX_UPLOAD_BYTES = 200*1024*1024; // 200 Mo, garde-fou d'upload (fichier source avant compression)
+
+// Découpe un base64 volumineux en plusieurs documents (posts/{id}/mediaChunks/{i}) au lieu d'un seul champ,
+// pour rester 100% Firestore sans passer par Firebase Storage.
+async function saveMediaChunks(collectionPath, docId, base64){
+  const parts = [];
+  for(let i=0;i<base64.length;i+=MEDIA_CHUNK_SIZE) parts.push(base64.slice(i, i+MEDIA_CHUNK_SIZE));
+  const BATCH_SIZE = 400; // reste sous la limite de 500 écritures par batch Firestore
+  for(let i=0;i<parts.length;i+=BATCH_SIZE){
+    const batch = db.batch();
+    parts.slice(i, i+BATCH_SIZE).forEach((chunk, j)=>{
+      const idx = i+j;
+      const ref = db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(String(idx));
+      batch.set(ref, {data:chunk});
+    });
+    await batch.commit();
+  }
+  return parts.length;
+}
+// Recolle les fragments d'un média découpé.
+async function loadMediaChunks(collectionPath, docId, count){
+  const snaps = await Promise.all(
+    Array.from({length:count}, (_,i)=> db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(String(i)).get())
+  );
+  return snaps.map(s=> (s.data()||{}).data||'').join('');
+}
+async function deleteMediaChunks(collectionPath, docId, count){
+  const BATCH_SIZE = 400;
+  for(let i=0;i<count;i+=BATCH_SIZE){
+    const batch = db.batch();
+    for(let j=i;j<Math.min(i+BATCH_SIZE, count);j++){
+      batch.delete(db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(String(j)));
+    }
+    await batch.commit().catch(e=> console.warn('deleteMediaChunks', e));
+  }
+}
+const mediaChunkCache = {};
+// À appeler sur un tableau de posts avant affichage : reconstruit mediaBase64 pour les posts fragmentés.
+async function resolveChunkedMedia(posts){
+  const toFetch = posts.filter(p=> p.mediaChunked && p.mediaChunkCount && !mediaChunkCache[p.id]);
+  if(toFetch.length){
+    await Promise.all(toFetch.map(async p=>{
+      try{ mediaChunkCache[p.id] = await loadMediaChunks('posts', p.id, p.mediaChunkCount); }
+      catch(e){ console.warn('Échec chargement média fragmenté', p.id, e); }
+    }));
+  }
+  posts.forEach(p=>{ if(p.mediaChunked && mediaChunkCache[p.id]) p.mediaBase64 = mediaChunkCache[p.id]; });
+}
 
 function uploadMediaToStorage(blob, pathPrefix, onProgress){
   return new Promise((resolve, reject)=>{
@@ -997,9 +1046,20 @@ async function prepareMediaForUpload(file, onStatus){
   return {mediaUrl:url, mediaStoragePath:path, mediaType};
 }
 
-async function prepareMedia(file, onStatus){
+/** Prépare un fichier local (image/gif/vidéo) pour un POST : compression légère, encodage en base64.
+ *  Stocké directement dans Firestore (mediaBase64), fragmenté en sous-collection si trop volumineux
+ *  pour un seul document — plus besoin de Firebase Storage pour les posts. */
+async function prepareMediaForPost(file, onStatus){
+  if(file.size > MAX_UPLOAD_BYTES) throw new Error('Fichier trop volumineux (max 200 Mo).');
   if(file.type.startsWith('image')){
-    let quality=0.75, maxW=800;
+    if(file.type === 'image/gif'){
+      // GIF animé : pas de recompression (ça casserait l'animation), juste encodé tel quel.
+      onStatus && onStatus('Préparation du GIF...');
+      const base64 = await fileToBase64(file);
+      if(base64.length > MEDIA_MAX_TOTAL) throw new Error('Ce GIF est trop volumineux. Essaie un GIF plus léger.');
+      return {base64, mediaType:'image'};
+    }
+    let quality=0.82, maxW=1280;
     let base64 = await resizeImageBase64(file, maxW, quality);
     let tries=0;
     while(base64.length > MEDIA_BASE64_LIMIT && tries<5){
@@ -1008,33 +1068,38 @@ async function prepareMedia(file, onStatus){
       base64 = await resizeImageBase64(file, maxW, quality);
       tries++;
     }
-    if(base64.length > MEDIA_BASE64_LIMIT) throw new Error('Impossible de compresser cette image assez. Essaie une image plus légère.');
+    if(base64.length > MEDIA_MAX_TOTAL) throw new Error('Impossible de compresser cette image assez. Essaie une image plus légère.');
     return {base64, mediaType:'image'};
   }
-  // video
-  if(file.size <= MEDIA_BASE64_LIMIT*0.7){
-    const base64 = await fileToBase64(file);
-    if(base64.length <= MEDIA_BASE64_LIMIT) return {base64, mediaType:'video'};
+  // vidéo
+  onStatus && onStatus('Préparation de la vidéo...');
+  let base64 = await fileToBase64(file);
+  if(base64.length <= MEDIA_BASE64_LIMIT || !supportsVideoCompression()){
+    if(base64.length <= MEDIA_MAX_TOTAL) return {base64, mediaType:'video'};
   }
   if(supportsVideoCompression()){
     const attempts = [
-      {maxWidth:480, bitrate:350000},
-      {maxWidth:360, bitrate:220000},
-      {maxWidth:240, bitrate:130000},
+      {maxWidth:854, bitrate:1200000},
+      {maxWidth:480, bitrate:600000},
+      {maxWidth:360, bitrate:350000},
+      {maxWidth:240, bitrate:180000},
     ];
     for(const opt of attempts){
       try{
         onStatus && onStatus('Compression de la vidéo (~'+opt.maxWidth+'p)...');
         const blob = await compressVideoFile(file, opt);
-        const base64 = await new Promise((res,rej)=>{
+        const compressed = await new Promise((res,rej)=>{
           const r = new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(blob);
         });
-        if(base64.length <= MEDIA_BASE64_LIMIT) return {base64, mediaType:'video'};
+        base64 = compressed; // garde la meilleure tentative en fallback
+        if(compressed.length <= MEDIA_MAX_TOTAL) return {base64: compressed, mediaType:'video'};
       }catch(e){ console.warn('Échec de compression vidéo', e); }
     }
   }
+  if(base64.length <= MEDIA_MAX_TOTAL) return {base64, mediaType:'video'}; // pas idéal, mais reste sous la limite absolue
   throw new Error('Cette vidéo reste trop lourde même compressée. Essaie une vidéo plus courte.');
 }
+
 
 /* ---------------- THEME ---------------- */
 function safeLS(){ try{ return window.localStorage; }catch(e){ return null; } }
@@ -1713,13 +1778,15 @@ async function buildHomeFeedCommunityPool(){
 }
 
 function subscribeHomeFeed(poolIds){
-  const un = db.collection('posts').orderBy('createdAt','desc').limit(100).onSnapshot(snap=>{
+  const un = db.collection('posts').orderBy('createdAt','desc').limit(100).onSnapshot(async snap=>{
     const body = document.getElementById('feedBody');
     if(!body) return;
     let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
     if(poolIds.length) posts = posts.filter(p=> poolIds.includes(p.communityId));
     posts = posts.slice(0, 40);
     if(posts.length===0){ body.innerHTML='<div class="empty">Aucun post. Rejoins ou crée une communauté !</div>'; return; }
+    await resolveChunkedMedia(posts);
+    if(!document.getElementById('feedBody')) return; // la page a changé pendant le chargement
     body.innerHTML='';
     posts.forEach(p=> body.appendChild(renderPostCard(p.id, p)));
   }, err=>{
@@ -1789,7 +1856,11 @@ async function deletePost(postId){
       await batch.commit();
     }
     await db.collection('posts').doc(postId).delete();
-    if(postDoc.exists && postDoc.data().mediaStoragePath) deleteMediaFromStorage(postDoc.data().mediaStoragePath);
+    if(postDoc.exists){
+      const pd = postDoc.data();
+      if(pd.mediaStoragePath) deleteMediaFromStorage(pd.mediaStoragePath);
+      if(pd.mediaChunked && pd.mediaChunkCount) deleteMediaChunks('posts', postId, pd.mediaChunkCount);
+    }
     toast('Post supprimé.');
   }catch(err){
     playSound('error');
@@ -2042,10 +2113,11 @@ function renderScroll(main){
 }
 
 function subscribeScrollFeed(ids){
-  const un = db.collection('posts').orderBy('createdAt','desc').limit(scrollBatchSize).onSnapshot(snap=>{
+  const un = db.collection('posts').orderBy('createdAt','desc').limit(scrollBatchSize).onSnapshot(async snap=>{
     const reachedEnd = snap.size < scrollBatchSize;
     let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
     posts = posts.filter(p=> ids.includes(p.communityId) && ((p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image'));
+    await resolveChunkedMedia(posts);
     const container = document.getElementById('scrollBody');
     if(container) renderImmersiveFeed(container, posts, reachedEnd? null : ()=>{
       scrollBatchSize += 20;
@@ -2509,7 +2581,7 @@ function toggleNewPost(slug, c){
     const mediaUrlInput = document.getElementById('npMediaUrl').value.trim();
     const musicUrl = document.getElementById('npMusic') ? document.getElementById('npMusic').value.trim() : '';
     if(!text && !file && !mediaUrlInput){ toast('Ajoute du texte ou un média.'); return; }
-    let mediaType=''; let mediaUrl=''; let mediaStoragePath=''; let videoType=''; let videoId='';
+    let mediaType=''; let mediaUrl=''; let mediaBase64=''; let videoType=''; let videoId='';
     const submitBtn = document.getElementById('npSubmit');
     const warn = document.getElementById('videoWarn');
     if(mediaUrlInput){
@@ -2519,8 +2591,8 @@ function toggleNewPost(slug, c){
       submitBtn.disabled = true; submitBtn.textContent = 'Traitement...';
       warn.style.color = 'var(--text-mute)';
       try{
-        const res = await prepareMediaForUpload(file, status=>{ warn.textContent = status; });
-        mediaUrl = res.mediaUrl; mediaStoragePath = res.mediaStoragePath; mediaType = res.mediaType;
+        const res = await prepareMediaForPost(file, status=>{ warn.textContent = status; });
+        mediaBase64 = res.base64; mediaType = res.mediaType;
         videoType = mediaType==='video' ? 'mp4' : '';
         warn.textContent = '';
       }catch(err){
@@ -2529,15 +2601,23 @@ function toggleNewPost(slug, c){
         submitBtn.disabled = false; submitBtn.textContent = 'Publier';
         return;
       }
-      submitBtn.disabled = false; submitBtn.textContent = 'Publier';
     }
-    await db.collection('posts').add({
+    const chunked = mediaBase64.length > MEDIA_BASE64_LIMIT;
+    const ref = await db.collection('posts').add({
       communityId: slug, communitySlug: c.slug,
       authorUid: currentUser.uid, authorPseudo: currentUser.pseudo, authorAvatar: currentUser.avatar||'',
-      text, mediaUrl, mediaStoragePath, mediaType, videoType, videoId, musicUrl: (mediaType==='video' && videoType!=='youtube') ? musicUrl : '',
+      text, mediaUrl, mediaBase64: chunked? '' : mediaBase64, mediaChunked: chunked, mediaType, videoType, videoId,
+      musicUrl: (mediaType==='video' && videoType!=='youtube') ? musicUrl : '',
       likes:[], dislikes:[],
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    if(chunked){
+      warn.style.color = 'var(--text-mute)'; warn.textContent = 'Envoi du média...';
+      const count = await saveMediaChunks('posts', ref.id, mediaBase64);
+      await ref.update({mediaChunkCount: count});
+      warn.textContent = '';
+    }
+    submitBtn.disabled = false; submitBtn.textContent = 'Publier';
     const yGain = 8 + Math.floor(Math.random()*5); // ~10 Yappers, variable
     grantYappers(currentUser.uid, yGain);
     await incrementUserStat(currentUser.uid, 'postsCount', 1);
@@ -2607,9 +2687,11 @@ function toggleNewAudioPost(slug, c){
 function listenCommunityFeed(slug, c){
   const feed = document.getElementById('communityFeed');
   const un = db.collection('posts').where('communityId','==',slug)
-    .onSnapshot(snap=>{
+    .onSnapshot(async snap=>{
       let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
       posts.sort((a,b)=> (b.createdAt? b.createdAt.toMillis():Date.now()) - (a.createdAt? a.createdAt.toMillis():Date.now()));
+      await resolveChunkedMedia(posts);
+      if(!document.getElementById('communityFeed')) return; // la page a changé pendant le chargement
       if(communityTab==='video'){
         const shorts = posts.filter(p=> (p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image');
         renderImmersiveFeed(feed, shorts);
@@ -4665,23 +4747,29 @@ function renderBotPostForm(area, bot){
     btn.disabled=true; btn.textContent='Publication...';
     warn.style.color='var(--text-mute)';
     try{
-      let mediaUrl='', mediaType='', mediaStoragePath='', videoType='', videoId='';
+      let mediaUrl='', mediaType='', mediaBase64='', videoType='', videoId='';
       if(urlInput){
         const src = detectMediaSource(urlInput);
         mediaUrl=urlInput; mediaType=src.mediaType; videoType=src.videoType; videoId=src.videoId||'';
       } else if(file){
-        const res = await prepareMediaForUpload(file, status=>{ warn.textContent=status; });
-        mediaUrl=res.mediaUrl; mediaStoragePath=res.mediaStoragePath; mediaType=res.mediaType;
+        const res = await prepareMediaForPost(file, status=>{ warn.textContent=status; });
+        mediaBase64 = res.base64; mediaType = res.mediaType;
         videoType = mediaType==='video' ? 'mp4' : '';
       }
+      const chunked = mediaBase64.length > MEDIA_BASE64_LIMIT;
       const commDoc = await db.collection('communities').doc(slug).get();
-      await db.collection('posts').add({
+      const ref = await db.collection('posts').add({
         communityId: slug, communitySlug: commDoc.data().slug,
         authorUid: bot.id, authorPseudo: bot.pseudo, authorAvatar: bot.avatar||'',
-        text, mediaUrl, mediaStoragePath, mediaType, videoType, videoId, musicUrl:'', isBotPost:true,
+        text, mediaUrl, mediaBase64: chunked? '' : mediaBase64, mediaChunked: chunked, mediaType, videoType, videoId, musicUrl:'', isBotPost:true,
         likes:[], dislikes:[],
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      if(chunked){
+        warn.textContent = 'Envoi du média...';
+        const count = await saveMediaChunks('posts', ref.id, mediaBase64);
+        await ref.update({mediaChunkCount: count});
+      }
       toast('Publié en tant que '+bot.pseudo+' !');
       area.innerHTML='';
     }catch(err){
@@ -4773,7 +4861,7 @@ function renderProfile(main, uid){
       </div>`;
     const actions = document.getElementById('profileActions');
     if(u.isBot){
-      actions.innerHTML = '<span class="ybadge"🥷 Anonyme </span>';
+      actions.innerHTML = '<span class="ybadge">🤖 Bot</span>';
     } else if(u.isAnon){
       actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
     } else if(currentUser.isAnon && !isMe){
@@ -5521,4 +5609,4 @@ function renderLiveRoom(main, codeRaw){
 }
 </script>
 </body>
-</html>s
+</html>
