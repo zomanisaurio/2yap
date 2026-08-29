@@ -4861,7 +4861,7 @@ function renderProfile(main, uid){
       </div>`;
     const actions = document.getElementById('profileActions');
     if(u.isBot){
-      actions.innerHTML = '<span class="ybadge">🤖 Bot</span>';
+      actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
     } else if(u.isAnon){
       actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
     } else if(currentUser.isAnon && !isMe){
