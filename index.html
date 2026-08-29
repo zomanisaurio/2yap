@@ -745,9 +745,10 @@ function fmtTime(s){
   const m=Math.floor(s/60), sec=Math.floor(s%60);
   return m+':'+(sec<10?'0':'')+sec;
 }
-function videoPlayerHtml(src){
+function videoPlayerHtml(src, musicUrl){
   return `<div class="v2-player">
-    <video class="v2-video" playsinline preload="metadata" src="${esc(src)}"></video>
+    <video class="v2-video" playsinline preload="metadata" src="${esc(src)}" ${musicUrl?'muted':''}></video>
+    ${musicUrl? `<audio class="v2-music" src="${esc(musicUrl)}" loop preload="metadata"></audio>` : ''}
     <button class="v2-bigplay">▶</button>
     <div class="v2-controls">
       <button class="v2-play" title="Lecture">▶</button>
@@ -767,7 +768,8 @@ function initVideoPlayer(root){
     bigPlay=root.querySelector('.v2-bigplay'), seek=root.querySelector('.v2-seek'),
     timeEl=root.querySelector('.v2-time'), muteBtn=root.querySelector('.v2-mute'),
     volSlider=root.querySelector('.v2-vol'), rwBtn=root.querySelector('.v2-rw'),
-    fwBtn=root.querySelector('.v2-fw'), fsBtn=root.querySelector('.v2-fs');
+    fwBtn=root.querySelector('.v2-fw'), fsBtn=root.querySelector('.v2-fs'),
+    musicAudio=root.querySelector('.v2-music');
   if(!video) return;
   let hideTimer, seeking=false;
   function showControls(){
@@ -775,8 +777,15 @@ function initVideoPlayer(root){
     hideTimer=setTimeout(()=>{ if(!video.paused) root.classList.remove('v2-show'); },2500);
   }
   function togglePlay(){ video.paused ? video.play().catch(()=>{}) : video.pause(); }
-  video.addEventListener('play', ()=>{ playBtn.textContent='⏸'; bigPlay.classList.add('hidden'); root.classList.add('v2-playing'); showControls(); });
-  video.addEventListener('pause', ()=>{ playBtn.textContent='▶'; bigPlay.classList.remove('hidden'); root.classList.remove('v2-playing'); root.classList.add('v2-show'); });
+  video.addEventListener('play', ()=>{
+    playBtn.textContent='⏸'; bigPlay.classList.add('hidden'); root.classList.add('v2-playing'); showControls();
+    pauseCommunityBgMusic();
+    if(musicAudio){ musicAudio.currentTime = video.currentTime; musicAudio.play().catch(()=>{}); }
+  });
+  video.addEventListener('pause', ()=>{
+    playBtn.textContent='▶'; bigPlay.classList.remove('hidden'); root.classList.remove('v2-playing'); root.classList.add('v2-show');
+    if(musicAudio) musicAudio.pause();
+  });
   video.addEventListener('loadedmetadata', ()=>{ timeEl.textContent = fmtTime(0)+' / '+fmtTime(video.duration); });
   video.addEventListener('timeupdate', ()=>{
     if(!seeking && video.duration) seek.value = Math.floor((video.currentTime/video.duration)*1000);
@@ -785,15 +794,23 @@ function initVideoPlayer(root){
   playBtn.onclick = togglePlay;
   bigPlay.onclick = togglePlay;
   video.addEventListener('click', togglePlay);
-  seek.addEventListener('input', ()=>{ seeking=true; if(video.duration) video.currentTime=(seek.value/1000)*video.duration; });
+  seek.addEventListener('input', ()=>{
+    seeking=true;
+    if(video.duration) video.currentTime=(seek.value/1000)*video.duration;
+    if(musicAudio && video.duration) musicAudio.currentTime=(seek.value/1000)*video.duration;
+  });
   seek.addEventListener('change', ()=>{ seeking=false; });
-  rwBtn.onclick = ()=>{ video.currentTime=Math.max(0, video.currentTime-10); };
-  fwBtn.onclick = ()=>{ video.currentTime=Math.min(video.duration||0, video.currentTime+10); };
-  muteBtn.onclick = ()=>{ video.muted=!video.muted; muteBtn.textContent=video.muted?'🔇':'🔊'; };
+  rwBtn.onclick = ()=>{ video.currentTime=Math.max(0, video.currentTime-10); if(musicAudio) musicAudio.currentTime=video.currentTime; };
+  fwBtn.onclick = ()=>{ video.currentTime=Math.min(video.duration||0, video.currentTime+10); if(musicAudio) musicAudio.currentTime=video.currentTime; };
+  muteBtn.onclick = ()=>{
+    const target = musicAudio || video;
+    target.muted=!target.muted; muteBtn.textContent=target.muted?'🔇':'🔊';
+  };
   volSlider.addEventListener('input', ()=>{
-    video.volume=parseFloat(volSlider.value);
-    if(video.volume===0){ video.muted=true; muteBtn.textContent='🔇'; }
-    else if(video.muted){ video.muted=false; muteBtn.textContent='🔊'; }
+    const target = musicAudio || video;
+    target.volume=parseFloat(volSlider.value);
+    if(target.volume===0){ target.muted=true; muteBtn.textContent='🔇'; }
+    else if(target.muted){ target.muted=false; muteBtn.textContent='🔊'; }
   });
   fsBtn.onclick = ()=>{
     if(root.requestFullscreen) root.requestFullscreen();
@@ -837,7 +854,7 @@ function initAudioPlayer(root){
   if(!audio) return;
   let seeking=false;
   function togglePlay(){ audio.paused ? audio.play().catch(()=>{}) : audio.pause(); }
-  audio.addEventListener('play', ()=>{ playBtn.textContent='⏸'; });
+  audio.addEventListener('play', ()=>{ playBtn.textContent='⏸'; pauseCommunityBgMusic(); });
   audio.addEventListener('pause', ()=>{ playBtn.textContent='▶'; });
   audio.addEventListener('loadedmetadata', ()=>{ timeEl.textContent = fmtTime(0)+' / '+fmtTime(audio.duration); });
   audio.addEventListener('timeupdate', ()=>{
@@ -1812,7 +1829,7 @@ function renderPostCard(id, p){
     </div>
     ${p.text? `<div class="post-text">${esc(p.text)}</div>`:''}
     ${p.mediaType==='video' && p.videoType==='youtube'? youtubeEmbedHtml(p.videoId) : ''}
-    ${p.mediaType==='video' && p.videoType!=='youtube'? videoPlayerHtml(p.mediaUrl||p.mediaBase64) : ''}
+    ${p.mediaType==='video' && p.videoType!=='youtube'? videoPlayerHtml(p.mediaUrl||p.mediaBase64, p.musicUrl) : ''}
     ${p.mediaType==='image'? `<img class="post-image" src="${p.mediaUrl||p.mediaBase64}">` : ''}
     ${p.mediaType==='audio'? audioPlayerHtml(p) : ''}
     <div class="post-actions">
@@ -2184,7 +2201,7 @@ function renderExplore(main, query){
       el.innerHTML = `
         <div class="thumb" style="background-image:url('${c.thumbnail||''}')"></div>
         <div class="cc-body">
-          <div class="cc-name">y/${esc(c.slug)}</div>
+          <div class="cc-name">${c.joinCode?'🔒 ':''}y/${esc(c.slug)}</div>
           <div class="cc-cat">${esc(c.category||'Général')} · ${(c.members||[]).length} membres</div>
         </div>`;
       grid.appendChild(el);
@@ -2262,6 +2279,11 @@ function buildThemeCss(primary, bgc){
 }
 function isCommunityAdmin(c){
   return !!(c && currentUser && (c.createdBy===currentUser.uid || (c.admins||[]).includes(currentUser.uid)));
+}
+// Qui peut ajouter des films, séries et mini-jeux dans la communauté ?
+function canAddCommunityMedia(c){
+  if(isCommunityAdmin(c)) return true;
+  return c.mediaPermission==='all' && (c.members||[]).includes(currentUser.uid);
 }
 
 /* ---------------- HUB (lien externe intégré, join/quitter sans sortir de l'app) ---------------- */
@@ -2371,6 +2393,23 @@ function renderCommunitySettings(main, slug){
             </select>
           </div>
           <div class="field">
+            <label>Qui peut ajouter des films, séries et mini-jeux ?</label>
+            <select id="ecMediaPerm">
+              <option value="admins" ${c.mediaPermission!=='all'?'selected':''}>Créateur et admins uniquement</option>
+              <option value="all" ${c.mediaPermission==='all'?'selected':''}>Tous les membres</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>🔒 Code d'accès (optionnel)</label>
+            <input id="ecJoinCode" value="${esc(c.joinCode||'')}" placeholder="Laisse vide pour une communauté ouverte" maxlength="30">
+            <div class="post-meta">Si rempli, ce code sera demandé pour rejoindre la communauté.</div>
+          </div>
+          <div class="field">
+            <label>🎵 Musique de fond de la communauté (lien, optionnel)</label>
+            <input id="ecBgMusic" value="${esc(c.bgMusicUrl||'')}" placeholder="https://.../musique.mp3">
+            <div class="post-meta">Joue en boucle pendant que les membres parcourent la communauté, et se coupe dès qu'une vidéo, un audio ou un mini-jeu est lancé.</div>
+          </div>
+          <div class="field">
             <label>🛡️ Admins de la communauté</label>
             <div id="ecAdminsList"><div class="empty">Chargement des membres...</div></div>
           </div>
@@ -2411,6 +2450,9 @@ function renderCommunitySettings(main, slug){
           thumbnail: thumb,
           hubUrl: document.getElementById('ecHub').value.trim(),
           postPermission: document.getElementById('ecPostPerm').value,
+          mediaPermission: document.getElementById('ecMediaPerm').value,
+          joinCode: document.getElementById('ecJoinCode').value.trim(),
+          bgMusicUrl: document.getElementById('ecBgMusic').value.trim(),
           themePrimary: primary, themeBg: bgc, advancedCSS: advancedCss,
           customCSS: buildThemeCss(primary, bgc) + '\n' + advancedCss
         };
@@ -2440,6 +2482,28 @@ function renderCommunitySettings(main, slug){
 
 /* ---------------- COMMUNITY PAGE ---------------- */
 let communityTab = 'posts';
+/* ---------------- MUSIQUE DE FOND DE COMMUNAUTÉ ---------------- */
+function pauseCommunityBgMusic(){
+  const el = document.getElementById('communityBgMusic');
+  if(el && !el.paused) el.pause();
+}
+function stopCommunityBgMusic(){
+  const el = document.getElementById('communityBgMusic');
+  if(el){ el.pause(); el.remove(); }
+}
+function startCommunityBgMusic(url){
+  stopCommunityBgMusic();
+  if(!url) return;
+  const el = document.createElement('audio');
+  el.id = 'communityBgMusic'; el.src = url; el.loop = true; el.volume = 0.4;
+  document.body.appendChild(el);
+  const tryPlay = ()=> el.play().catch(()=>{});
+  tryPlay();
+  // Si l'autoplay est bloqué par le navigateur, on démarre au premier clic dans la page.
+  const onFirstInteract = ()=>{ tryPlay(); document.removeEventListener('click', onFirstInteract); };
+  document.addEventListener('click', onFirstInteract, {once:true});
+}
+
 function renderCommunity(main, slug){
   main.innerHTML = '<div class="empty">Chargement...</div>';
   db.collection('communities').doc(slug).get().then(doc=>{
@@ -2476,7 +2540,14 @@ function renderCommunity(main, slug){
         <div id="newPostArea"></div>
         <div id="communityFeed"><div class="empty">Chargement...</div></div>
       </div>`;
+    if(isMember && c.bgMusicUrl) startCommunityBgMusic(c.bgMusicUrl);
+    unsubscribers.push(stopCommunityBgMusic);
     document.getElementById('joinBtn')?.addEventListener('click', async ()=>{
+      if(c.joinCode){
+        const entered = prompt('Cette communauté est protégée par un code. Entre le code d\'accès :');
+        if(entered===null) return;
+        if(entered.trim() !== c.joinCode){ toast('Code incorrect.'); return; }
+      }
       await db.collection('communities').doc(slug).update({members: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)});
       renderCommunity(main, slug);
     });
@@ -2721,7 +2792,7 @@ async function renderCommunityFeed(feed, posts, c){
       </div>
       ${p.text? `<div class="post-text">${esc(p.text)}</div>`:''}
       ${p.mediaType==='video' && p.videoType==='youtube'? youtubeEmbedHtml(p.videoId) : ''}
-      ${p.mediaType==='video' && p.videoType!=='youtube'? videoPlayerHtml(p.mediaUrl||p.mediaBase64) : ''}
+      ${p.mediaType==='video' && p.videoType!=='youtube'? videoPlayerHtml(p.mediaUrl||p.mediaBase64, p.musicUrl) : ''}
       ${p.mediaType==='image'? `<img class="post-image" src="${p.mediaUrl||p.mediaBase64}">`:''}
       ${p.mediaType==='audio'? audioPlayerHtml(p) : ''}
       <div class="post-actions">
@@ -2789,7 +2860,8 @@ async function renderCommunityFeed(feed, posts, c){
           bigPlay=root.querySelector('.v2-bigplay'), seek=root.querySelector('.v2-seek'),
           timeEl=root.querySelector('.v2-time'), muteBtn=root.querySelector('.v2-mute'),
           volSlider=root.querySelector('.v2-vol'), rwBtn=root.querySelector('.v2-rw'),
-          fwBtn=root.querySelector('.v2-fw'), fsBtn=root.querySelector('.v2-fs');
+          fwBtn=root.querySelector('.v2-fw'), fsBtn=root.querySelector('.v2-fs'),
+          musicAudio=root.querySelector('.v2-music');
         if(!video) return;
         let hideTimer, seeking=false;
         function showControls(){
@@ -2797,8 +2869,15 @@ async function renderCommunityFeed(feed, posts, c){
           hideTimer=setTimeout(()=>{ if(!video.paused) root.classList.remove('v2-show'); },2500);
         }
         function togglePlay(){ video.paused ? video.play().catch(()=>{}) : video.pause(); }
-        video.addEventListener('play', ()=>{ playBtn.textContent='⏸'; bigPlay.classList.add('hidden'); root.classList.add('v2-playing'); showControls(); });
-        video.addEventListener('pause', ()=>{ playBtn.textContent='▶'; bigPlay.classList.remove('hidden'); root.classList.remove('v2-playing'); root.classList.add('v2-show'); });
+        video.addEventListener('play', ()=>{
+          playBtn.textContent='⏸'; bigPlay.classList.add('hidden'); root.classList.add('v2-playing'); showControls();
+          parent.postMessage({type:'pauseBgMusic'}, '*');
+          if(musicAudio){ musicAudio.currentTime = video.currentTime; musicAudio.play().catch(()=>{}); }
+        });
+        video.addEventListener('pause', ()=>{
+          playBtn.textContent='▶'; bigPlay.classList.remove('hidden'); root.classList.remove('v2-playing'); root.classList.add('v2-show');
+          if(musicAudio) musicAudio.pause();
+        });
         video.addEventListener('loadedmetadata', ()=>{ timeEl.textContent = fmtTime(0)+' / '+fmtTime(video.duration); });
         video.addEventListener('timeupdate', ()=>{
           if(!seeking && video.duration) seek.value = Math.floor((video.currentTime/video.duration)*1000);
@@ -2807,15 +2886,23 @@ async function renderCommunityFeed(feed, posts, c){
         playBtn.onclick = togglePlay;
         bigPlay.onclick = togglePlay;
         video.addEventListener('click', togglePlay);
-        seek.addEventListener('input', ()=>{ seeking=true; if(video.duration) video.currentTime=(seek.value/1000)*video.duration; });
+        seek.addEventListener('input', ()=>{
+          seeking=true;
+          if(video.duration) video.currentTime=(seek.value/1000)*video.duration;
+          if(musicAudio && video.duration) musicAudio.currentTime=(seek.value/1000)*video.duration;
+        });
         seek.addEventListener('change', ()=>{ seeking=false; });
-        rwBtn.onclick = ()=>{ video.currentTime=Math.max(0, video.currentTime-10); };
-        fwBtn.onclick = ()=>{ video.currentTime=Math.min(video.duration||0, video.currentTime+10); };
-        muteBtn.onclick = ()=>{ video.muted=!video.muted; muteBtn.textContent=video.muted?'🔇':'🔊'; };
+        rwBtn.onclick = ()=>{ video.currentTime=Math.max(0, video.currentTime-10); if(musicAudio) musicAudio.currentTime=video.currentTime; };
+        fwBtn.onclick = ()=>{ video.currentTime=Math.min(video.duration||0, video.currentTime+10); if(musicAudio) musicAudio.currentTime=video.currentTime; };
+        muteBtn.onclick = ()=>{
+          const target = musicAudio || video;
+          target.muted=!target.muted; muteBtn.textContent=target.muted?'🔇':'🔊';
+        };
         volSlider.addEventListener('input', ()=>{
-          video.volume=parseFloat(volSlider.value);
-          if(video.volume===0){ video.muted=true; muteBtn.textContent='🔇'; }
-          else if(video.muted){ video.muted=false; muteBtn.textContent='🔊'; }
+          const target = musicAudio || video;
+          target.volume=parseFloat(volSlider.value);
+          if(target.volume===0){ target.muted=true; muteBtn.textContent='🔇'; }
+          else if(target.muted){ target.muted=false; muteBtn.textContent='🔊'; }
         });
         fsBtn.onclick = ()=>{
           if(root.requestFullscreen) root.requestFullscreen();
@@ -2835,7 +2922,7 @@ async function renderCommunityFeed(feed, posts, c){
         if(!audio) return;
         let seeking=false;
         function togglePlay(){ audio.paused ? audio.play().catch(()=>{}) : audio.pause(); }
-        audio.addEventListener('play', ()=>{ playBtn.textContent='⏸'; });
+        audio.addEventListener('play', ()=>{ playBtn.textContent='⏸'; parent.postMessage({type:'pauseBgMusic'}, '*'); });
         audio.addEventListener('pause', ()=>{ playBtn.textContent='▶'; });
         audio.addEventListener('loadedmetadata', ()=>{ timeEl.textContent = fmtTime(0)+' / '+fmtTime(audio.duration); });
         audio.addEventListener('timeupdate', ()=>{
@@ -2860,13 +2947,14 @@ async function renderCommunityFeed(feed, posts, c){
    FILMS & SÉRIES DE COMMUNAUTÉ
    ================================================================ */
 async function renderCommunityMedia(container, slug, c, cAdmin){
+  const canAdd = canAddCommunityMedia(c);
   container.innerHTML = `
     <div class="panel-body">
-      ${cAdmin? `<button class="small" id="addMovieBtn">+ Film</button> <button class="secondary small" id="addSeriesBtn" style="margin-left:6px;">+ Série</button>` : ''}
+      ${canAdd? `<button class="small" id="addMovieBtn">+ Film</button> <button class="secondary small" id="addSeriesBtn" style="margin-left:6px;">+ Série</button>` : ''}
     </div>
     <div id="addMediaArea"></div>
     <div class="grid" id="mediaGrid"><div class="empty">Chargement...</div></div>`;
-  if(cAdmin){
+  if(canAdd){
     document.getElementById('addMovieBtn').onclick = ()=>
       renderAddMovieForm(document.getElementById('addMediaArea'), slug, ()=> renderCommunityMedia(container, slug, c, cAdmin));
     document.getElementById('addSeriesBtn').onclick = ()=>
@@ -3250,6 +3338,7 @@ function startGamePlay(slug, g, btn){
   const area = document.getElementById('play-'+g.id); if(!area) return;
   if(area.innerHTML){ area.innerHTML=''; btn.textContent='▶ Jouer'; stopGameMusic(); return; }
   btn.textContent='⏹ Fermer';
+  pauseCommunityBgMusic();
   startGameMusic(g.musicUrl);
   const runners = {maze:playMazeGame, runner:playRunnerGame, shooter:playShooterGame,
     memory:playMemoryGame, silhouette:playSilhouetteGame, sequence:playSequenceGame,
@@ -4549,6 +4638,7 @@ window.addEventListener('message', async (e)=>{
   if(e.data && e.data.type==='resize'){
     document.querySelectorAll('#communityFeed iframe').forEach(f=> f.style.height = e.data.h+'px');
   }
+  if(e.data && e.data.type==='pauseBgMusic'){ pauseCommunityBgMusic(); }
 });
 
 /* ---------------- ADMIN ---------------- */
