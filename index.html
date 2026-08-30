@@ -7,7 +7,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.0/firebase-app.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.0/firebase-auth.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.0/firebase-firestore.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.0/firebase-storage.js"></script>
 <style>
   :root{
     --primary:#4F46E5;
@@ -610,7 +609,6 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
-const storage = firebase.storage();
 
 let currentUser = null; // {uid, pseudo, email, bio, avatar, following, followers}
 const ADMIN_EMAILS = ['amanivoyou23@gmail.com','zomanifrance@gmail.com'];
@@ -829,7 +827,7 @@ function audioPlayerHtml(p){
     <div class="a2-body">
       <div class="a2-title">${esc(p.audioTitle||'Sans titre')}</div>
       <div class="a2-artist">${esc(p.audioArtist||'')}</div>
-      <audio class="a2-audio" preload="metadata" src="${esc(p.mediaUrl)}"></audio>
+      <audio class="a2-audio" preload="metadata" src="${esc(p.mediaUrl||p.mediaBase64)}"></audio>
       <div class="a2-controls">
         <button class="a2-play a2-btn-play">▶</button>
         <button class="a2-rw">⏪</button>
@@ -839,7 +837,7 @@ function audioPlayerHtml(p){
       </div>
       <div class="a2-extra">
         ${p.lyrics? `<button class="a2-lyrics-toggle">📜 Paroles</button>`:''}
-        ${p.allowDownload? `<a href="${esc(p.mediaUrl)}" download target="_blank" rel="noopener">⬇️ Télécharger</a>`:''}
+        ${p.allowDownload? `<a href="${esc(p.mediaUrl||p.mediaBase64)}" download target="_blank" rel="noopener">⬇️ Télécharger</a>`:''}
       </div>
       ${p.lyrics? `<div class="a2-lyrics">${esc(p.lyrics)}</div>`:''}
     </div>
@@ -964,8 +962,9 @@ const MEDIA_CHUNK_SIZE = 650000;   // taille de chaque fragment quand on découp
 const MAX_UPLOAD_BYTES = 200*1024*1024; // 200 Mo, garde-fou d'upload (fichier source avant compression)
 
 // Découpe un base64 volumineux en plusieurs documents (posts/{id}/mediaChunks/{i}) au lieu d'un seul champ,
-// pour rester 100% Firestore sans passer par Firebase Storage.
-async function saveMediaChunks(collectionPath, docId, base64){
+// pour rester 100% Firestore sans passer par Firebase Storage. `prefix` permet à plusieurs médias
+// (ex: les épisodes d'une même série) de partager la sous-collection mediaChunks d'un même document parent.
+async function saveMediaChunks(collectionPath, docId, base64, prefix=''){
   const parts = [];
   for(let i=0;i<base64.length;i+=MEDIA_CHUNK_SIZE) parts.push(base64.slice(i, i+MEDIA_CHUNK_SIZE));
   const BATCH_SIZE = 400; // reste sous la limite de 500 écritures par batch Firestore
@@ -973,7 +972,7 @@ async function saveMediaChunks(collectionPath, docId, base64){
     const batch = db.batch();
     parts.slice(i, i+BATCH_SIZE).forEach((chunk, j)=>{
       const idx = i+j;
-      const ref = db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(String(idx));
+      const ref = db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(prefix+idx);
       batch.set(ref, {data:chunk});
     });
     await batch.commit();
@@ -981,18 +980,18 @@ async function saveMediaChunks(collectionPath, docId, base64){
   return parts.length;
 }
 // Recolle les fragments d'un média découpé.
-async function loadMediaChunks(collectionPath, docId, count){
+async function loadMediaChunks(collectionPath, docId, count, prefix=''){
   const snaps = await Promise.all(
-    Array.from({length:count}, (_,i)=> db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(String(i)).get())
+    Array.from({length:count}, (_,i)=> db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(prefix+i).get())
   );
   return snaps.map(s=> (s.data()||{}).data||'').join('');
 }
-async function deleteMediaChunks(collectionPath, docId, count){
+async function deleteMediaChunks(collectionPath, docId, count, prefix=''){
   const BATCH_SIZE = 400;
   for(let i=0;i<count;i+=BATCH_SIZE){
     const batch = db.batch();
     for(let j=i;j<Math.min(i+BATCH_SIZE, count);j++){
-      batch.delete(db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(String(j)));
+      batch.delete(db.collection(collectionPath).doc(docId).collection('mediaChunks').doc(prefix+j));
     }
     await batch.commit().catch(e=> console.warn('deleteMediaChunks', e));
   }
@@ -1010,28 +1009,6 @@ async function resolveChunkedMedia(posts){
   posts.forEach(p=>{ if(p.mediaChunked && mediaChunkCache[p.id]) p.mediaBase64 = mediaChunkCache[p.id]; });
 }
 
-function uploadMediaToStorage(blob, pathPrefix, onProgress){
-  return new Promise((resolve, reject)=>{
-    const guessExt = (blob.type && blob.type.includes('/')) ? blob.type.split('/')[1].split('+')[0] : 'bin';
-    const path = pathPrefix + '/' + Date.now() + '_' + Math.random().toString(36).slice(2,8) + '.' + guessExt;
-    const ref = storage.ref().child(path);
-    const task = ref.put(blob, {contentType: blob.type || 'application/octet-stream'});
-    task.on('state_changed',
-      snap => { const pct = snap.totalBytes ? Math.round((snap.bytesTransferred/snap.totalBytes)*100) : 0; onProgress && onProgress(pct); },
-      err => reject(err),
-      async () => {
-        try{ const url = await task.snapshot.ref.getDownloadURL(); resolve({url, path}); }
-        catch(e){ reject(e); }
-      }
-    );
-  });
-}
-
-async function deleteMediaFromStorage(path){
-  if(!path) return;
-  try{ await storage.ref().child(path).delete(); }catch(e){ console.warn('deleteMediaFromStorage', e); }
-}
-
 /** Détecte le type de source d'une URL vidéo/image collée par l'utilisateur.
  *  Renvoie {videoType:'youtube', videoId} ou {videoType:'mp4'} ou {videoType:'image'} */
 function detectMediaSource(url){
@@ -1040,28 +1017,10 @@ function detectMediaSource(url){
   if(/\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(url)) return {mediaType:'video', videoType:'mp4'};
   return {mediaType:'image', videoType:''};
 }
-
-/** Prépare un fichier local (image/vidéo) pour publication : compression légère
- *  puis upload vers Firebase Storage (fini le Base64 dans Firestore pour les nouveaux posts). */
-async function prepareMediaForUpload(file, onStatus){
-  if(file.size > MAX_UPLOAD_BYTES) throw new Error('Fichier trop volumineux (max 200 Mo).');
-  const mediaType = file.type.startsWith('video') ? 'video' : 'image';
-  let blob = file;
-  if(mediaType==='image' && file.type!=='image/gif'){
-    onStatus && onStatus('Compression de l\'image...');
-    const dataUrl = await resizeImageBase64(file, 1280, 0.82);
-    blob = await (await fetch(dataUrl)).blob();
-  } else if(mediaType==='video' && file.size > 50*1024*1024 && supportsVideoCompression()){
-    onStatus && onStatus('Compression de la vidéo (fichier volumineux)...');
-    try{ blob = await compressVideoFile(file, {maxWidth:854, bitrate:1500000}); }
-    catch(e){ /* on garde le fichier original si la compression échoue */ }
-  }
-  onStatus && onStatus('Envoi vers le stockage... 0%');
-  const {url, path} = await uploadMediaToStorage(blob, 'posts/'+currentUser.uid, pct=>{
-    onStatus && onStatus('Envoi vers le stockage... '+pct+'%');
-  });
-  return {mediaUrl:url, mediaStoragePath:path, mediaType};
-}
+// Ancien média hébergé sur Firebase Storage (posts créés avant la migration 100% Firestore) :
+// on ne peut plus les supprimer côté stockage puisque Storage n'est plus utilisé, mais ça n'empêche
+// pas de supprimer le post lui-même.
+function deleteMediaFromStorage(){}
 
 /** Prépare un fichier local (image/gif/vidéo) pour un POST : compression légère, encodage en base64.
  *  Stocké directement dans Firestore (mediaBase64), fragmenté en sous-collection si trop volumineux
@@ -1593,6 +1552,7 @@ function router(){
   else if(route==='explore'){ renderExplore(main, arg?decodeURIComponent(arg):''); }
   else if(route==='community'){ renderCommunity(main, arg); }
   else if(route==='create-community'){ renderCreateCommunity(main); }
+  else if(route==='create-subcommunity'){ renderCreateCommunity(main, arg); }
   else if(route==='profile'){ renderProfile(main, arg||currentUser.uid); }
   else if(route==='messages'){ renderMessages(main); }
   else if(route==='chat'){ renderChat(main, arg); }
@@ -2191,7 +2151,7 @@ function renderExplore(main, query){
     q = (q||'').toLowerCase();
     const grid = document.getElementById('exploreGrid');
     if(!grid) return;
-    const filtered = all.filter(c => !q || (c.slug||'').includes(q) || (c.category||'').toLowerCase().includes(q) || (c.name||'').toLowerCase().includes(q));
+    const filtered = all.filter(c => !c.parentSlug && (!q || (c.slug||'').includes(q) || (c.category||'').toLowerCase().includes(q) || (c.name||'').toLowerCase().includes(q)));
     if(filtered.length===0){ grid.innerHTML='<div class="empty">Aucune communauté trouvée.</div>'; return; }
     grid.innerHTML='';
     filtered.forEach(c=>{
@@ -2210,10 +2170,10 @@ function renderExplore(main, query){
 }
 
 /* ---------------- CREATE COMMUNITY ---------------- */
-function renderCreateCommunity(main){
+function renderCreateCommunity(main, parentSlug){
   main.innerHTML = `
     <div class="panel">
-      <div class="panel-head">Créer une communauté</div>
+      <div class="panel-head">${parentSlug? 'Créer une sous-communauté de y/'+esc(parentSlug) : 'Créer une communauté'}</div>
       <div class="panel-body">
         <div class="field"><label>Nom (y/NOM)</label><input id="ccName" placeholder="ex: gaming"></div>
         <div class="field"><label>Catégorie</label>
@@ -2237,15 +2197,16 @@ function renderCreateCommunity(main){
           <summary>⚙️ CSS avancé (optionnel, pour les habitués)</summary>
           <div class="field"><textarea id="ccCss" placeholder=".post-title{color:#c00;}" style="font-family:monospace;"></textarea></div>
         </details>
-        <button id="ccSubmit">Créer la communauté</button>
+        <button id="ccSubmit">${parentSlug? 'Créer la sous-communauté' : 'Créer la communauté'}</button>
         <div id="ccMsg" style="color:var(--red); margin-top:6px;"></div>
       </div>
     </div>`;
   document.getElementById('ccSubmit').onclick = async ()=>{
     const name = document.getElementById('ccName').value;
-    const slug = slugify(name);
+    const shortSlug = slugify(name);
     const msgEl = document.getElementById('ccMsg');
-    if(slug.length<2){ msgEl.textContent='Nom invalide (lettres/chiffres, min 2 caractères).'; return; }
+    if(shortSlug.length<2){ msgEl.textContent='Nom invalide (lettres/chiffres, min 2 caractères).'; return; }
+    const slug = parentSlug ? (parentSlug+'--'+shortSlug) : shortSlug;
     const exists = await db.collection('communities').doc(slug).get();
     if(exists.exists){ msgEl.textContent='Ce nom de communauté existe déjà.'; return; }
     let thumb = '';
@@ -2266,11 +2227,12 @@ function renderCreateCommunity(main){
       members: [currentUser.uid],
       admins: [],
       postPermission: 'all',
+      parentSlug: parentSlug || '',
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     await incrementUserStat(currentUser.uid, 'communitiesCreated', 1);
     evaluateBadges(currentUser.uid);
-    toast('Communauté créée !');
+    toast(parentSlug? 'Sous-communauté créée !' : 'Communauté créée !');
     location.hash = '#community/'+slug;
   };
 }
@@ -2515,6 +2477,7 @@ function renderCommunity(main, slug){
     communityTab = 'posts';
     main.innerHTML = `
       <div class="panel">
+        ${c.parentSlug? `<div style="padding:8px 14px 0;"><a href="#community/${esc(c.parentSlug)}">↑ Sous-commu de y/${esc(c.parentSlug)}</a></div>` : ''}
         <div class="comm-banner" style="background-image:url('${esc(c.bannerGifUrl||c.thumbnail||'')}'); ${c.largeLayout?'height:220px;':''}">
           <div class="title" style="${c.largeLayout?'font-size:26px;':''}">y/${esc(c.slug)}</div>
         </div>
@@ -2536,6 +2499,7 @@ function renderCommunity(main, slug){
           <button class="tab-video" data-tab="video">🎬 Court</button>
           <button class="tab-games" data-tab="games">🎮 Mini-jeux</button>
           <button class="tab-media" data-tab="media">🎞️ Films & Séries</button>
+          <button class="tab-subs" data-tab="subs">🧩 Sous-commus</button>
         </div>
         <div id="newPostArea"></div>
         <div id="communityFeed"><div class="empty">Chargement...</div></div>
@@ -2567,6 +2531,7 @@ function renderCommunity(main, slug){
         communityTab = btn.dataset.tab;
         if(communityTab==='games'){ renderCommunityGames(document.getElementById('communityFeed'), slug, c, cAdmin); }
         else if(communityTab==='media'){ renderCommunityMedia(document.getElementById('communityFeed'), slug, c, cAdmin); }
+        else if(communityTab==='subs'){ renderCommunitySubs(document.getElementById('communityFeed'), slug, c, cAdmin, isMember); }
         else { listenCommunityFeed(slug, c); }
       };
     });
@@ -2734,15 +2699,23 @@ function toggleNewAudioPost(slug, c){
       let coverUrl='';
       const coverFile = document.getElementById('naCover').files[0];
       if(coverFile) coverUrl = await resizeImageBase64(coverFile, 500, 0.8);
-      const {url, path} = await uploadMediaToStorage(file, 'audio/'+currentUser.uid, pct=>{ warn.textContent='Envoi... '+pct+'%'; });
-      await db.collection('posts').add({
+      warn.textContent = 'Préparation de l\'audio...';
+      const audioBase64 = await fileToBase64(file);
+      if(audioBase64.length > MEDIA_MAX_TOTAL) throw new Error('Ce fichier audio est trop volumineux. Essaie un fichier plus léger.');
+      const chunked = audioBase64.length > MEDIA_BASE64_LIMIT;
+      const ref = await db.collection('posts').add({
         communityId: slug, communitySlug: c.slug,
         authorUid: currentUser.uid, authorPseudo: currentUser.pseudo, authorAvatar: currentUser.avatar||'',
-        text: desc, mediaType:'audio', mediaUrl: url, mediaStoragePath: path,
+        text: desc, mediaType:'audio', mediaUrl:'', mediaBase64: chunked? '' : audioBase64, mediaChunked: chunked,
         audioTitle: title, audioArtist: artist, lyrics, coverUrl, allowDownload,
         likes:[], dislikes:[],
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      if(chunked){
+        warn.textContent = 'Envoi de l\'audio...';
+        const count = await saveMediaChunks('posts', ref.id, audioBase64);
+        await ref.update({mediaChunkCount: count});
+      }
       const yGain = 8 + Math.floor(Math.random()*5);
       grantYappers(currentUser.uid, yGain);
       await incrementUserStat(currentUser.uid, 'postsCount', 1);
@@ -2944,6 +2917,39 @@ async function renderCommunityFeed(feed, posts, c){
 }
 
 /* ================================================================
+   SOUS-COMMUNAUTÉS
+   ================================================================ */
+async function renderCommunitySubs(container, slug, c, cAdmin, isMember){
+  if(!container) return;
+  container.innerHTML = '<div class="empty">Chargement des sous-communautés...</div>';
+  let snap;
+  try{ snap = await db.collection('communities').where('parentSlug','==',slug).get(); }
+  catch(e){ container.innerHTML = '<div class="empty">Erreur : '+esc(e.message)+'</div>'; return; }
+  const subs = []; snap.forEach(d=> subs.push({id:d.id, ...d.data()}));
+  container.innerHTML = `
+    <div class="panel-body" style="border-top:1px solid var(--border);">
+      <div class="post-meta" style="margin-bottom:8px;">Des espaces plus spécifiques, rattachés à y/${esc(slug)}.</div>
+      ${isMember? '<button class="small" id="addSubBtn">+ Créer une sous-communauté</button>' : ''}
+      <div class="grid" id="subsGrid" style="padding:14px 0 0;"></div>
+    </div>`;
+  document.getElementById('addSubBtn')?.addEventListener('click', ()=> location.hash = '#create-subcommunity/'+slug);
+  const grid = document.getElementById('subsGrid');
+  if(!subs.length){ grid.innerHTML = '<div class="empty">Aucune sous-communauté pour le moment.</div>'; return; }
+  subs.forEach(sc=>{
+    const el = document.createElement('div');
+    el.className = 'comm-card';
+    el.onclick = ()=> location.hash = '#community/'+sc.id;
+    el.innerHTML = `
+      <div class="thumb" style="background-image:url('${sc.thumbnail||''}')"></div>
+      <div class="cc-body">
+        <div class="cc-name">${sc.joinCode?'🔒 ':''}y/${esc(sc.slug)}</div>
+        <div class="cc-cat">${esc(sc.category||'Général')} · ${(sc.members||[]).length} membres</div>
+      </div>`;
+    grid.appendChild(el);
+  });
+}
+
+/* ================================================================
    FILMS & SÉRIES DE COMMUNAUTÉ
    ================================================================ */
 async function renderCommunityMedia(container, slug, c, cAdmin){
@@ -3022,21 +3028,28 @@ function renderAddMovieForm(area, slug, onDone){
       let posterUrl='';
       const posterFile = document.getElementById('amPoster').files[0];
       if(posterFile) posterUrl = await resizeImageBase64(posterFile, 500, 0.8);
-      let videoUrl='', videoType='mp4', videoStoragePath='';
+      let videoUrl='', videoType='mp4', videoBase64='';
       if(urlInput){
         const src = detectMediaSource(urlInput);
         videoUrl = urlInput; videoType = src.videoType||'mp4';
       } else {
-        const res = await prepareMediaForUpload(file, status=>{ warn.textContent=status; });
-        videoUrl = res.mediaUrl; videoStoragePath = res.mediaStoragePath;
+        const res = await prepareMediaForPost(file, status=>{ warn.textContent=status; });
+        videoBase64 = res.base64; videoType = 'mp4';
       }
-      await db.collection('communities').doc(slug).collection('media').add({
+      const chunked = videoBase64.length > MEDIA_BASE64_LIMIT;
+      const ref = await db.collection('communities').doc(slug).collection('media').add({
         type:'movie', title, description: document.getElementById('amDesc').value.trim(),
         posterUrl, year: document.getElementById('amYear').value||'', creator: document.getElementById('amCreator').value.trim(),
-        ageRating: document.getElementById('amAge').value, videoUrl, videoType, videoStoragePath,
+        ageRating: document.getElementById('amAge').value, videoUrl, videoType,
+        videoBase64: chunked? '' : videoBase64, videoChunked: chunked,
         allowDownload: document.getElementById('amAllowDl').checked,
         createdBy: currentUser.uid, createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      if(chunked){
+        warn.textContent = 'Envoi de la vidéo...';
+        const count = await saveMediaChunks('communities/'+slug+'/media', ref.id, videoBase64);
+        await ref.update({videoChunkCount: count});
+      }
       toast('Film publié !');
       area.innerHTML='';
       onDone();
@@ -3079,10 +3092,19 @@ function renderAddSeriesForm(area, slug, onCreated){
 
 function mediaPlayerBlock(item){
   if(item.videoType==='youtube') return youtubeEmbedHtml(detectMediaSource(item.videoUrl).videoId || item.videoUrl.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]{6,})/i)?.[1] || '');
-  return videoPlayerHtml(item.videoUrl);
+  return videoPlayerHtml(item.videoUrl||item.videoBase64);
+}
+// Si la vidéo d'un film/épisode est fragmentée (trop lourde pour un seul doc Firestore), on la recolle ici.
+async function resolveChunkedVideo(item, mediaCollectionPath, docId, prefix=''){
+  if(item.videoChunked && item.videoChunkCount && !item.videoUrl){
+    item.videoBase64 = await loadMediaChunks(mediaCollectionPath, docId, item.videoChunkCount, prefix);
+  }
+  return item;
 }
 
 async function renderMovieDetail(container, slug, c, cAdmin, m){
+  container.innerHTML = '<div class="panel-body"><div class="empty">Chargement du film...</div></div>';
+  await resolveChunkedVideo(m, 'communities/'+slug+'/media', m.id);
   container.innerHTML = `
     <div class="panel-body">
       <button class="secondary small" id="mdBack">← Retour</button>
@@ -3090,7 +3112,7 @@ async function renderMovieDetail(container, slug, c, cAdmin, m){
       <div class="post-meta">${[m.year, m.creator, m.ageRating].filter(Boolean).map(esc).join(' · ')}</div>
       <div style="margin:10px 0;">${mediaPlayerBlock(m)}</div>
       ${m.description? `<div class="post-text">${esc(m.description)}</div>`:''}
-      ${m.allowDownload && m.videoType!=='youtube'? `<a href="${esc(m.videoUrl)}" download target="_blank" rel="noopener" class="btn secondary" style="display:inline-block;margin-top:8px;">⬇️ Télécharger</a>`:''}
+      ${m.allowDownload && m.videoType!=='youtube' && (m.videoUrl||m.videoBase64)? `<a href="${esc(m.videoUrl||m.videoBase64)}" download target="_blank" rel="noopener" class="btn secondary" style="display:inline-block;margin-top:8px;">⬇️ Télécharger</a>`:''}
       ${cAdmin? `<button class="danger small" id="mdDelete" style="display:block;margin-top:10px;">🗑️ Supprimer ce film</button>`:''}
     </div>`;
   document.querySelectorAll('.v2-player').forEach(initVideoPlayer);
@@ -3098,6 +3120,7 @@ async function renderMovieDetail(container, slug, c, cAdmin, m){
   document.getElementById('mdDelete')?.addEventListener('click', async ()=>{
     if(!confirm('Supprimer ce film ?')) return;
     if(m.videoStoragePath) deleteMediaFromStorage(m.videoStoragePath);
+    if(m.videoChunked && m.videoChunkCount) deleteMediaChunks('communities/'+slug+'/media', m.id, m.videoChunkCount);
     await db.collection('communities').doc(slug).collection('media').doc(m.id).delete();
     renderCommunityMedia(container, slug, c, cAdmin);
   });
@@ -3105,17 +3128,24 @@ async function renderMovieDetail(container, slug, c, cAdmin, m){
 
 async function renderSeriesDetail(container, slug, c, cAdmin, m){
   const seasons = m.seasons||[];
+  const canAdd = canAddCommunityMedia(c);
   container.innerHTML = `
     <div class="panel-body">
       <button class="secondary small" id="sdBack">← Retour</button>
       <h3 style="margin:10px 0 4px;">📺 ${esc(m.title)}</h3>
       ${m.description? `<div class="post-text">${esc(m.description)}</div>`:''}
-      ${cAdmin? `<button class="small" id="sdAddSeason" style="margin-top:8px;">+ Ajouter une saison</button> <button class="danger small" id="sdDelete">🗑️ Supprimer la série</button>`:''}
+      ${canAdd? `<button class="small" id="sdAddSeason" style="margin-top:8px;">+ Ajouter une saison</button>`:''} ${cAdmin? `<button class="danger small" id="sdDelete">🗑️ Supprimer la série</button>`:''}
       <div id="seasonsList" style="margin-top:10px;"></div>
     </div>`;
   document.getElementById('sdBack').onclick = ()=> renderCommunityMedia(container, slug, c, cAdmin);
   document.getElementById('sdDelete')?.addEventListener('click', async ()=>{
     if(!confirm('Supprimer la série et tous ses épisodes ?')) return;
+    for(const s of seasons){
+      for(const ep of (s.episodes||[])){
+        if(ep.videoChunked && ep.videoChunkCount) await deleteMediaChunks('communities/'+slug+'/media', m.id, ep.videoChunkCount, ep.videoChunkKey||'');
+        if(ep.videoStoragePath) deleteMediaFromStorage(ep.videoStoragePath);
+      }
+    }
     await db.collection('communities').doc(slug).collection('media').doc(m.id).delete();
     renderCommunityMedia(container, slug, c, cAdmin);
   });
@@ -3133,7 +3163,7 @@ async function renderSeriesDetail(container, slug, c, cAdmin, m){
     block.className='panel';
     block.style.marginBottom='10px';
     block.innerHTML = `
-      <div class="panel-head">Saison ${season.number} ${cAdmin? `<button type="button" class="secondary small" data-addep="${sIdx}" style="float:right;">+ Épisode</button>`:''}</div>
+      <div class="panel-head">Saison ${season.number} ${canAdd? `<button type="button" class="secondary small" data-addep="${sIdx}" style="float:right;">+ Épisode</button>`:''}</div>
       <div class="panel-body" id="epList${sIdx}"></div>`;
     list.appendChild(block);
     const epBox = block.querySelector(`#epList${sIdx}`);
@@ -3182,19 +3212,26 @@ function renderAddEpisodeForm(container, slug, c, cAdmin, m, sIdx){
       let thumbnailUrl='';
       const thumbFile = area.querySelector('#aeThumb').files[0];
       if(thumbFile) thumbnailUrl = await resizeImageBase64(thumbFile, 300, 0.75);
-      let videoUrl='', videoType='mp4', videoStoragePath='';
+      let videoUrl='', videoType='mp4', videoBase64='';
       if(urlInput){
         const src = detectMediaSource(urlInput);
         videoUrl = urlInput; videoType = src.videoType||'mp4';
       } else {
-        const res = await prepareMediaForUpload(file, status=>{ warn.textContent=status; });
-        videoUrl = res.mediaUrl; videoStoragePath = res.mediaStoragePath;
+        const res = await prepareMediaForPost(file, status=>{ warn.textContent=status; });
+        videoBase64 = res.base64; videoType = 'mp4';
       }
+      const chunked = videoBase64.length > MEDIA_BASE64_LIMIT;
+      const chunkKey = chunked ? ('ep_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'_') : '';
       const episode = {
         number: parseInt(area.querySelector('#aeNum').value,10)||1,
         title, description: area.querySelector('#aeDesc').value.trim(),
-        thumbnailUrl, videoUrl, videoType, videoStoragePath
+        thumbnailUrl, videoUrl, videoType,
+        videoBase64: chunked? '' : videoBase64, videoChunked: chunked, videoChunkKey: chunkKey
       };
+      if(chunked){
+        warn.textContent = 'Envoi de la vidéo...';
+        episode.videoChunkCount = await saveMediaChunks('communities/'+slug+'/media', m.id, videoBase64, chunkKey);
+      }
       const seasons = m.seasons.map((s,i)=> i===sIdx ? {...s, episodes:[...(s.episodes||[]), episode]} : s);
       await db.collection('communities').doc(slug).collection('media').doc(m.id).update({seasons});
       toast('Épisode ajouté !');
@@ -3206,6 +3243,8 @@ function renderAddEpisodeForm(container, slug, c, cAdmin, m, sIdx){
 
 async function renderEpisodePlayer(container, slug, c, cAdmin, m, sIdx, eIdx){
   const ep = m.seasons[sIdx].episodes[eIdx];
+  container.innerHTML = '<div class="panel-body"><div class="empty">Chargement de l\'épisode...</div></div>';
+  await resolveChunkedVideo(ep, 'communities/'+slug+'/media', m.id, ep.videoChunkKey||'');
   container.innerHTML = `
     <div class="panel-body">
       <button class="secondary small" id="epBack">← Retour à la série</button>
@@ -3219,6 +3258,7 @@ async function renderEpisodePlayer(container, slug, c, cAdmin, m, sIdx, eIdx){
   document.getElementById('epDelete')?.addEventListener('click', async ()=>{
     if(!confirm('Supprimer cet épisode ?')) return;
     if(ep.videoStoragePath) deleteMediaFromStorage(ep.videoStoragePath);
+    if(ep.videoChunked && ep.videoChunkCount) deleteMediaChunks('communities/'+slug+'/media', m.id, ep.videoChunkCount, ep.videoChunkKey||'');
     const seasons = m.seasons.map((s,i)=> i===sIdx ? {...s, episodes:s.episodes.filter((_,j)=>j!==eIdx)} : s);
     await db.collection('communities').doc(slug).collection('media').doc(m.id).update({seasons});
     const doc = await db.collection('communities').doc(slug).collection('media').doc(m.id).get();
@@ -3250,9 +3290,10 @@ async function renderCommunityGames(container, slug, c, cAdmin){
   try{ gamesSnap = await db.collection('communities').doc(slug).collection('games').orderBy('createdAt','desc').get(); }
   catch(e){ container.innerHTML='<div class="empty">Erreur : '+esc(e.message)+'</div>'; return; }
   const games=[]; gamesSnap.forEach(d=> games.push({id:d.id,...d.data()}));
+  const canAdd = canAddCommunityMedia(c);
   container.innerHTML = `
     <div class="panel-body" style="border-top:1px solid var(--border);">
-      ${cAdmin? '<button class="secondary small" id="addGameBtn">+ Ajouter un mini-jeu</button>':''}
+      ${canAdd? '<button class="secondary small" id="addGameBtn">+ Ajouter un mini-jeu</button>':''}
       <div id="addGameArea"></div>
       <div id="gamesList" style="margin-top:10px;"></div>
     </div>`;
@@ -3287,7 +3328,7 @@ async function renderCommunityGames(container, slug, c, cAdmin){
       renderCommunityGames(container, slug, c, cAdmin);
     };
   });
-  if(cAdmin) document.getElementById('addGameBtn').onclick = ()=>
+  if(canAdd) document.getElementById('addGameBtn').onclick = ()=>
     renderAddGameForm(document.getElementById('addGameArea'), slug, ()=> renderCommunityGames(container, slug, c, cAdmin));
 }
 
@@ -4951,7 +4992,7 @@ function renderProfile(main, uid){
       </div>`;
     const actions = document.getElementById('profileActions');
     if(u.isBot){
-      actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
+      actions.innerHTML = '<span class="ybadge">🤖 Bot</span>';
     } else if(u.isAnon){
       actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
     } else if(currentUser.isAnon && !isMe){
