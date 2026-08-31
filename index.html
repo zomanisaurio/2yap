@@ -427,6 +427,8 @@
   #hubBar .hub-title{font-weight:700; font-size:13.5px; flex:1;}
   #hubFrameWrap{height:calc(100vh - 50px);}
   #hubFrameWrap iframe{width:100%; height:100%; border:none; background:#000;}
+  #catboxFrameWrap{height:70vh; min-height:420px;}
+  #catboxFrameWrap iframe{width:100%; height:100%; border:none; background:#fff;}
   .hub-fallback{padding:30px 16px; text-align:center;}
 
   /* GIF PICKER (Giphy) */
@@ -510,6 +512,7 @@
     <a class="navlink" data-nav href="#messages"><span class="ic">✉️</span> Messages</a>
     <a class="navlink" id="myProfileLink" data-nav href="#profile"><span class="ic">👤</span> Mon profil</a>
     <a class="navlink" data-nav href="#support"><span class="ic">🆘</span> Support</a>
+    <a class="navlink" data-nav href="#catbox"><span class="ic">📦</span> Stockage Catbox</a>
     <a class="navlink hidden" id="adminLink" data-nav href="#admin"><span class="ic">🛡️</span> Admin</a>
     <a class="navlink hidden" id="botsLink" data-nav href="#bots"><span class="ic">🤖</span> Bots</a>
   </div>
@@ -1552,7 +1555,6 @@ function router(){
   else if(route==='explore'){ renderExplore(main, arg?decodeURIComponent(arg):''); }
   else if(route==='community'){ renderCommunity(main, arg); }
   else if(route==='create-community'){ renderCreateCommunity(main); }
-  else if(route==='create-subcommunity'){ renderCreateCommunity(main, arg); }
   else if(route==='profile'){ renderProfile(main, arg||currentUser.uid); }
   else if(route==='messages'){ renderMessages(main); }
   else if(route==='chat'){ renderChat(main, arg); }
@@ -1564,6 +1566,7 @@ function router(){
   else if(route==='gif-packs'){ renderGifPacks(main); }
   else if(route==='leaderboard'){ renderLeaderboard(main); }
   else if(route==='support'){ renderSupport(main); }
+  else if(route==='catbox'){ renderCatbox(main); }
   else { renderHome(main); }
 }
 
@@ -2040,6 +2043,31 @@ function renderSupport(main){
   };
 }
 
+/* ---------------- STOCKAGE CATBOX ---------------- */
+function renderCatbox(main){
+  main.innerHTML = `
+    <div class="panel">
+      <div class="panel-head">📦 Stockage Catbox</div>
+      <div class="panel-body">
+        <div class="post-text">Le Stockage Catbox (catbox.moe) sert à créer des liens pour tous types de média à entrer dans vos posts (pour des vidéos ou audios).</div>
+        <div class="post-meta" style="margin-top:8px;">
+          1. Dépose ton fichier sur Catbox ci-dessous.<br>
+          2. Une fois l'envoi terminé, copie le lien généré (ex: https://files.catbox.moe/xxxxx.mp4).<br>
+          3. Colle ce lien dans le champ « ...ou colle un lien » quand tu crées un post, un film, une série ou un audio.
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        Catbox
+        <a href="https://catbox.moe" target="_blank" rel="noopener" class="secondary btn" style="float:right;padding:4px 10px;font-size:12px;">Ouvrir dans un onglet ↗</a>
+      </div>
+      <div id="catboxFrameWrap">
+        <iframe id="catboxFrame" src="https://catbox.moe" allow="clipboard-write" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>
+      </div>
+    </div>`;
+}
+
 /* ---------------- PEOPLE SEARCH ---------------- */
 function renderPeople(main){
   main.innerHTML = `
@@ -2151,7 +2179,7 @@ function renderExplore(main, query){
     q = (q||'').toLowerCase();
     const grid = document.getElementById('exploreGrid');
     if(!grid) return;
-    const filtered = all.filter(c => !c.parentSlug && (!q || (c.slug||'').includes(q) || (c.category||'').toLowerCase().includes(q) || (c.name||'').toLowerCase().includes(q)));
+    const filtered = all.filter(c => !q || (c.slug||'').includes(q) || (c.category||'').toLowerCase().includes(q) || (c.name||'').toLowerCase().includes(q));
     if(filtered.length===0){ grid.innerHTML='<div class="empty">Aucune communauté trouvée.</div>'; return; }
     grid.innerHTML='';
     filtered.forEach(c=>{
@@ -2170,10 +2198,10 @@ function renderExplore(main, query){
 }
 
 /* ---------------- CREATE COMMUNITY ---------------- */
-function renderCreateCommunity(main, parentSlug){
+function renderCreateCommunity(main){
   main.innerHTML = `
     <div class="panel">
-      <div class="panel-head">${parentSlug? 'Créer une sous-communauté de y/'+esc(parentSlug) : 'Créer une communauté'}</div>
+      <div class="panel-head">Créer une communauté</div>
       <div class="panel-body">
         <div class="field"><label>Nom (y/NOM)</label><input id="ccName" placeholder="ex: gaming"></div>
         <div class="field"><label>Catégorie</label>
@@ -2197,16 +2225,15 @@ function renderCreateCommunity(main, parentSlug){
           <summary>⚙️ CSS avancé (optionnel, pour les habitués)</summary>
           <div class="field"><textarea id="ccCss" placeholder=".post-title{color:#c00;}" style="font-family:monospace;"></textarea></div>
         </details>
-        <button id="ccSubmit">${parentSlug? 'Créer la sous-communauté' : 'Créer la communauté'}</button>
+        <button id="ccSubmit">Créer la communauté</button>
         <div id="ccMsg" style="color:var(--red); margin-top:6px;"></div>
       </div>
     </div>`;
   document.getElementById('ccSubmit').onclick = async ()=>{
     const name = document.getElementById('ccName').value;
-    const shortSlug = slugify(name);
+    const slug = slugify(name);
     const msgEl = document.getElementById('ccMsg');
-    if(shortSlug.length<2){ msgEl.textContent='Nom invalide (lettres/chiffres, min 2 caractères).'; return; }
-    const slug = parentSlug ? (parentSlug+'--'+shortSlug) : shortSlug;
+    if(slug.length<2){ msgEl.textContent='Nom invalide (lettres/chiffres, min 2 caractères).'; return; }
     const exists = await db.collection('communities').doc(slug).get();
     if(exists.exists){ msgEl.textContent='Ce nom de communauté existe déjà.'; return; }
     let thumb = '';
@@ -2227,12 +2254,11 @@ function renderCreateCommunity(main, parentSlug){
       members: [currentUser.uid],
       admins: [],
       postPermission: 'all',
-      parentSlug: parentSlug || '',
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     await incrementUserStat(currentUser.uid, 'communitiesCreated', 1);
     evaluateBadges(currentUser.uid);
-    toast(parentSlug? 'Sous-communauté créée !' : 'Communauté créée !');
+    toast('Communauté créée !');
     location.hash = '#community/'+slug;
   };
 }
@@ -2444,6 +2470,8 @@ function renderCommunitySettings(main, slug){
 
 /* ---------------- COMMUNITY PAGE ---------------- */
 let communityTab = 'posts';
+let communitySubFilter = null; // slug de la sous-tranche active dans l'onglet Posts (null = tous les posts)
+let communitySubNames = {}; // cache slug -> nom affichable, alimenté par renderCommunitySubs
 /* ---------------- MUSIQUE DE FOND DE COMMUNAUTÉ ---------------- */
 function pauseCommunityBgMusic(){
   const el = document.getElementById('communityBgMusic');
@@ -2475,9 +2503,9 @@ function renderCommunity(main, slug){
     const cAdmin = isCommunityAdmin(c);
     const canPost = c.postPermission!=='admins' || cAdmin;
     communityTab = 'posts';
+    communitySubFilter = null;
     main.innerHTML = `
       <div class="panel">
-        ${c.parentSlug? `<div style="padding:8px 14px 0;"><a href="#community/${esc(c.parentSlug)}">↑ Sous-commu de y/${esc(c.parentSlug)}</a></div>` : ''}
         <div class="comm-banner" style="background-image:url('${esc(c.bannerGifUrl||c.thumbnail||'')}'); ${c.largeLayout?'height:220px;':''}">
           <div class="title" style="${c.largeLayout?'font-size:26px;':''}">y/${esc(c.slug)}</div>
         </div>
@@ -2506,6 +2534,9 @@ function renderCommunity(main, slug){
       </div>`;
     if(isMember && c.bgMusicUrl) startCommunityBgMusic(c.bgMusicUrl);
     unsubscribers.push(stopCommunityBgMusic);
+    db.collection('communities').doc(slug).collection('subs').get().then(snap=>{
+      snap.forEach(d=> communitySubNames[d.id]=d.data().name);
+    }).catch(()=>{});
     document.getElementById('joinBtn')?.addEventListener('click', async ()=>{
       if(c.joinCode){
         const entered = prompt('Cette communauté est protégée par un code. Entre le code d\'accès :');
@@ -2572,12 +2603,23 @@ function toggleNewPost(slug, c){
         </select>
       </div>
       <div class="field"><textarea id="npText" placeholder="Quoi de neuf ?"></textarea></div>
+      <div class="field"><label>🏷️ Sous-tranche (optionnel)</label><select id="npSub"><option value="">— Aucune —</option></select></div>
       <div class="field"><label>Photo, GIF ou vidéo courte (optionnel)</label><input id="npMedia" type="file" accept="video/*,image/*"></div>
       <div class="field"><label>...ou colle un lien (vidéo directe, YouTube, ou image)</label><input id="npMediaUrl" placeholder="https://youtube.com/watch?v=... ou https://.../video.mp4"></div>
       <div class="field hidden" id="npMusicField"><label>🎵 Lien musique (URL audio, optionnel — pour le format Court)</label><input id="npMusic" placeholder="https://.../musique.mp3"></div>
       <div id="videoWarn"></div>
       <button id="npSubmit">Publier</button>
     </div>`;
+  db.collection('communities').doc(slug).collection('subs').orderBy('createdAt','asc').get().then(snap=>{
+    const sel = document.getElementById('npSub');
+    if(!sel) return;
+    snap.forEach(d=>{
+      const opt = document.createElement('option');
+      opt.value = d.id; opt.textContent = d.data().name;
+      if(d.id===communitySubFilter) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }).catch(()=>{});
   const NP_TEMPLATES = {
     poll: '📊 SONDAGE\n\nQuestion : \n\nA) \nB) \nC) \n\nVotez en commentaire !',
     announcement: '📢 ANNONCE\n\n',
@@ -2639,11 +2681,13 @@ function toggleNewPost(slug, c){
       }
     }
     const chunked = mediaBase64.length > MEDIA_BASE64_LIMIT;
+    const subSlug = document.getElementById('npSub') ? document.getElementById('npSub').value : '';
     const ref = await db.collection('posts').add({
       communityId: slug, communitySlug: c.slug,
       authorUid: currentUser.uid, authorPseudo: currentUser.pseudo, authorAvatar: currentUser.avatar||'',
       text, mediaUrl, mediaBase64: chunked? '' : mediaBase64, mediaChunked: chunked, mediaType, videoType, videoId,
       musicUrl: (mediaType==='video' && videoType!=='youtube') ? musicUrl : '',
+      subSlug,
       likes:[], dislikes:[],
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -2734,13 +2778,14 @@ function listenCommunityFeed(slug, c){
     .onSnapshot(async snap=>{
       let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
       posts.sort((a,b)=> (b.createdAt? b.createdAt.toMillis():Date.now()) - (a.createdAt? a.createdAt.toMillis():Date.now()));
+      if(communitySubFilter) posts = posts.filter(p=> p.subSlug===communitySubFilter);
       await resolveChunkedMedia(posts);
       if(!document.getElementById('communityFeed')) return; // la page a changé pendant le chargement
       if(communityTab==='video'){
         const shorts = posts.filter(p=> (p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image');
         renderImmersiveFeed(feed, shorts);
       } else {
-        renderCommunityFeed(feed, posts, c);
+        renderCommunityFeed(feed, posts, c, slug);
       }
     }, err=>{
       console.error(err);
@@ -2749,9 +2794,12 @@ function listenCommunityFeed(slug, c){
   unsubscribers.push(un);
 }
 
-async function renderCommunityFeed(feed, posts, c){
+async function renderCommunityFeed(feed, posts, c, slug){
   if(!feed) return;
-  if(posts.length===0){ feed.innerHTML = '<div class="empty">Rien à afficher ici pour le moment.</div>'; return; }
+  const filterBar = communitySubFilter
+    ? `<div class="post-meta" style="padding:8px 14px;border-bottom:1px solid var(--border);">🏷️ Filtré sur <b>${esc(communitySubNames[communitySubFilter]||communitySubFilter)}</b> — <a href="javascript:void(0)" id="clearSubFilter">voir tous les posts</a></div>`
+    : '';
+  if(posts.length===0){ feed.innerHTML = filterBar+'<div class="empty">Rien à afficher ici pour le moment.</div>'; document.getElementById('clearSubFilter')?.addEventListener('click', ()=>{ communitySubFilter=null; listenCommunityFeed(slug, c); }); return; }
   const counts = await Promise.all(posts.map(p=> db.collection('posts').doc(p.id).collection('comments').get().then(s=>s.size).catch(()=>0)));
   // Render via sandboxed iframe so community custom CSS only affects this feed
   const postsHtml = posts.map((p,i)=>`
@@ -2760,7 +2808,7 @@ async function renderCommunityFeed(feed, posts, c){
         <img class="post-avatar" src="${p.authorAvatar||fallbackAvatar()}" style="width:32px;height:32px;border-radius:4px;">
         <div>
           <div class="post-author">${esc(p.authorPseudo)}</div>
-          <div class="post-meta">${timeAgo(p.createdAt)}</div>
+          <div class="post-meta">${timeAgo(p.createdAt)}${p.subSlug? ' · 🏷️ '+esc(communitySubNames[p.subSlug]||p.subSlug):''}</div>
         </div>
       </div>
       ${p.text? `<div class="post-text">${esc(p.text)}</div>`:''}
@@ -2912,41 +2960,84 @@ async function renderCommunityFeed(feed, posts, c){
       document.querySelectorAll('.a2-player').forEach(initAudioPlayer);
     <\/script>
   </body></html>`;
-  feed.innerHTML='';
+  feed.innerHTML=filterBar;
   feed.appendChild(iframe);
+  document.getElementById('clearSubFilter')?.addEventListener('click', ()=>{ communitySubFilter=null; listenCommunityFeed(slug, c); });
 }
 
 /* ================================================================
-   SOUS-COMMUNAUTÉS
+   SOUS-TRANCHES (catégories internes qui filtrent les posts — PAS des
+   communautés séparées : mêmes membres, mêmes paramètres, même join)
    ================================================================ */
 async function renderCommunitySubs(container, slug, c, cAdmin, isMember){
   if(!container) return;
-  container.innerHTML = '<div class="empty">Chargement des sous-communautés...</div>';
+  container.innerHTML = '<div class="empty">Chargement des sous-tranches...</div>';
   let snap;
-  try{ snap = await db.collection('communities').where('parentSlug','==',slug).get(); }
+  try{ snap = await db.collection('communities').doc(slug).collection('subs').orderBy('createdAt','asc').get(); }
   catch(e){ container.innerHTML = '<div class="empty">Erreur : '+esc(e.message)+'</div>'; return; }
   const subs = []; snap.forEach(d=> subs.push({id:d.id, ...d.data()}));
+  subs.forEach(s=> communitySubNames[s.slug]=s.name);
   container.innerHTML = `
     <div class="panel-body" style="border-top:1px solid var(--border);">
-      <div class="post-meta" style="margin-bottom:8px;">Des espaces plus spécifiques, rattachés à y/${esc(slug)}.</div>
-      ${isMember? '<button class="small" id="addSubBtn">+ Créer une sous-communauté</button>' : ''}
-      <div class="grid" id="subsGrid" style="padding:14px 0 0;"></div>
+      <div class="post-meta" style="margin-bottom:8px;">Des catégories pour trier les posts à l'intérieur de y/${esc(slug)} — pas besoin de les rejoindre séparément, tous les membres y ont accès.</div>
+      ${isMember? '<button class="small" id="addSubBtn">+ Créer une sous-tranche</button>' : ''}
+      <div id="addSubArea"></div>
+      <div id="subsListArea" style="margin-top:10px;"></div>
     </div>`;
-  document.getElementById('addSubBtn')?.addEventListener('click', ()=> location.hash = '#create-subcommunity/'+slug);
-  const grid = document.getElementById('subsGrid');
-  if(!subs.length){ grid.innerHTML = '<div class="empty">Aucune sous-communauté pour le moment.</div>'; return; }
-  subs.forEach(sc=>{
-    const el = document.createElement('div');
-    el.className = 'comm-card';
-    el.onclick = ()=> location.hash = '#community/'+sc.id;
-    el.innerHTML = `
-      <div class="thumb" style="background-image:url('${sc.thumbnail||''}')"></div>
-      <div class="cc-body">
-        <div class="cc-name">${sc.joinCode?'🔒 ':''}y/${esc(sc.slug)}</div>
-        <div class="cc-cat">${esc(sc.category||'Général')} · ${(sc.members||[]).length} membres</div>
+  document.getElementById('addSubBtn')?.addEventListener('click', ()=>{
+    const area = document.getElementById('addSubArea');
+    if(area.innerHTML){ area.innerHTML=''; return; }
+    area.innerHTML = `
+      <div class="panel" style="margin-top:8px;">
+        <div class="panel-body">
+          <div class="field"><label>Nom de la sous-tranche</label><input id="subName" maxlength="30" placeholder="ex: Memes, Entraide, Clips..."></div>
+          <button id="subSaveBtn" class="small">Créer</button>
+          <div id="subMsg" style="color:var(--red); margin-top:6px;"></div>
+        </div>
       </div>`;
-    grid.appendChild(el);
+    document.getElementById('subSaveBtn').onclick = async ()=>{
+      const name = document.getElementById('subName').value.trim();
+      const msgEl = document.getElementById('subMsg');
+      if(name.length<2){ msgEl.textContent='Nom trop court.'; return; }
+      const subSlug = slugify(name);
+      if(!subSlug){ msgEl.textContent='Nom invalide.'; return; }
+      const existing = await db.collection('communities').doc(slug).collection('subs').doc(subSlug).get();
+      if(existing.exists){ msgEl.textContent='Une sous-tranche avec ce nom existe déjà.'; return; }
+      await db.collection('communities').doc(slug).collection('subs').doc(subSlug).set({
+        name, slug: subSlug, createdBy: currentUser.uid, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      area.innerHTML='';
+      renderCommunitySubs(container, slug, c, cAdmin, isMember);
+    };
   });
+  const list = document.getElementById('subsListArea');
+  if(!subs.length){ list.innerHTML = '<div class="empty">Aucune sous-tranche pour le moment.</div>'; return; }
+  subs.forEach(sub=>{
+    const row = document.createElement('div');
+    row.className = 'live-join-row';
+    row.innerHTML = `<div style="cursor:pointer;"><b>🏷️ ${esc(sub.name)}</b></div>`;
+    row.querySelector('div').onclick = ()=>{
+      communitySubFilter = sub.slug;
+      goToPostsTab();
+    };
+    if(cAdmin){
+      const delBtn = document.createElement('button');
+      delBtn.className = 'danger small'; delBtn.textContent = '🗑️';
+      delBtn.onclick = async ()=>{
+        if(!confirm('Supprimer la sous-tranche "'+sub.name+'" ? Les posts existants ne seront pas supprimés, juste détachés.')) return;
+        await db.collection('communities').doc(slug).collection('subs').doc(sub.id).delete();
+        renderCommunitySubs(container, slug, c, cAdmin, isMember);
+      };
+      row.appendChild(delBtn);
+    }
+    list.appendChild(row);
+  });
+  function goToPostsTab(){
+    document.querySelectorAll('.comm-tabs button').forEach(b=>b.classList.remove('on'));
+    document.querySelector('.comm-tabs .tab-posts')?.classList.add('on');
+    communityTab = 'posts';
+    listenCommunityFeed(slug, c);
+  }
 }
 
 /* ================================================================
