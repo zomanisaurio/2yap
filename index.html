@@ -4870,6 +4870,18 @@ function renderBots(main){
         <div class="field"><label>Nom du bot</label><input id="botPseudo" placeholder="ex: 2Yap News"></div>
         <div class="field"><label>Bio (optionnel)</label><input id="botBio" placeholder="Petite description..."></div>
         <div class="field"><label>🖼️ Avatar (optionnel)</label><input type="file" id="botAvatar" accept="image/*"></div>
+        <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+          <input type="checkbox" id="botFollowable" style="width:auto;">
+          <label for="botFollowable" style="margin:0;">Peut être suivi</label>
+        </div>
+        <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+          <input type="checkbox" id="botMessageable" style="width:auto;">
+          <label for="botMessageable" style="margin:0;">Peut recevoir des messages</label>
+        </div>
+        <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+          <input type="checkbox" id="botShowLabel" checked style="width:auto;">
+          <label for="botShowLabel" style="margin:0;">Afficher le label 🤖 Bot sur son profil</label>
+        </div>
         <button id="botCreateBtn">Créer le bot</button>
         <div id="botMsg" class="post-meta"></div>
       </div>
@@ -4894,6 +4906,9 @@ function renderBots(main){
       await db.collection('users').add({
         pseudo, bio: document.getElementById('botBio').value.trim(), avatar,
         isBot:true, createdByAdmin: currentUser.uid,
+        botFollowable: document.getElementById('botFollowable').checked,
+        botMessageable: document.getElementById('botMessageable').checked,
+        botShowLabel: document.getElementById('botShowLabel').checked,
         following:[], followers:[], yappers:0,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
@@ -4915,8 +4930,10 @@ function renderBots(main){
         <img class="avatar" src="${bot.avatar||fallbackAvatar()}">
         <div style="flex:1;"><b>${esc(bot.pseudo)}</b><div class="post-meta">${esc(bot.bio||'')}</div></div>
         <button class="small" data-post="${bot.id}">📤 Publier</button>
+        <button class="secondary small" data-settings="${bot.id}" style="margin-left:6px;">⚙️</button>
         <button class="danger small" data-del="${bot.id}" style="margin-left:6px;">🗑️</button>`;
       row.querySelector('[data-post]').onclick = e=>{ e.stopPropagation(); renderBotPostForm(document.getElementById('botPostArea'), bot); };
+      row.querySelector('[data-settings]').onclick = e=>{ e.stopPropagation(); renderBotSettingsForm(document.getElementById('botPostArea'), bot, main); };
       row.querySelector('[data-del]').onclick = async e=>{
         e.stopPropagation();
         if(!confirm('Supprimer le bot '+bot.pseudo+' ? (ses posts existants resteront visibles)')) return;
@@ -4929,6 +4946,38 @@ function renderBots(main){
     const list = document.getElementById('botsList');
     if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message||'erreur inconnue')+'</div>';
   });
+}
+
+function renderBotSettingsForm(area, bot, main){
+  area.innerHTML = `
+    <div class="panel" style="margin-top:8px;">
+      <div class="panel-head">Paramètres de ${esc(bot.pseudo)}</div>
+      <div class="panel-body">
+        <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+          <input type="checkbox" id="bsFollowable" ${bot.botFollowable?'checked':''} style="width:auto;">
+          <label for="bsFollowable" style="margin:0;">Peut être suivi</label>
+        </div>
+        <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+          <input type="checkbox" id="bsMessageable" ${bot.botMessageable?'checked':''} style="width:auto;">
+          <label for="bsMessageable" style="margin:0;">Peut recevoir des messages</label>
+        </div>
+        <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+          <input type="checkbox" id="bsShowLabel" ${bot.botShowLabel!==false?'checked':''} style="width:auto;">
+          <label for="bsShowLabel" style="margin:0;">Afficher le label 🤖 Bot sur son profil</label>
+        </div>
+        <button id="bsSaveBtn" class="small">Enregistrer</button>
+      </div>
+    </div>`;
+  document.getElementById('bsSaveBtn').onclick = async ()=>{
+    await db.collection('users').doc(bot.id).update({
+      botFollowable: document.getElementById('bsFollowable').checked,
+      botMessageable: document.getElementById('bsMessageable').checked,
+      botShowLabel: document.getElementById('bsShowLabel').checked
+    });
+    area.innerHTML='';
+    toast('Paramètres du bot mis à jour.');
+    renderBots(main);
+  };
 }
 
 function renderBotPostForm(area, bot){
@@ -5083,7 +5132,34 @@ function renderProfile(main, uid){
       </div>`;
     const actions = document.getElementById('profileActions');
     if(u.isBot){
-      actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
+      actions.innerHTML = u.botShowLabel!==false ? '<span class="ybadge">🤖 Bot</span>' : '';
+      if(!isMe && u.botFollowable){
+        const btn = document.createElement('button');
+        btn.textContent = iFollow ? 'Ne plus suivre' : 'Suivre';
+        btn.className = iFollow ? 'secondary' : '';
+        if(actions.innerHTML) btn.style.marginLeft='6px';
+        btn.onclick = async ()=>{
+          const myRef = db.collection('users').doc(currentUser.uid);
+          const theirRef = db.collection('users').doc(uid);
+          if(iFollow){
+            await myRef.update({following: firebase.firestore.FieldValue.arrayRemove(uid)});
+            await theirRef.update({followers: firebase.firestore.FieldValue.arrayRemove(currentUser.uid)});
+          }else{
+            await myRef.update({following: firebase.firestore.FieldValue.arrayUnion(uid)});
+            await theirRef.update({followers: firebase.firestore.FieldValue.arrayUnion(currentUser.uid)});
+          }
+          const doc2 = await myRef.get(); currentUser = {uid:currentUser.uid, ...doc2.data()};
+          renderProfile(main, uid);
+        };
+        actions.appendChild(btn);
+      }
+      if(!isMe && u.botMessageable){
+        const msgBtn = document.createElement('button');
+        msgBtn.className='secondary'; msgBtn.style.marginLeft='6px';
+        msgBtn.textContent='Envoyer un message';
+        msgBtn.onclick = ()=> location.hash = '#chat/'+uid;
+        actions.appendChild(msgBtn);
+      }
     } else if(u.isAnon){
       actions.innerHTML = '<span class="ybadge">🥷 Anonyme</span>';
     } else if(currentUser.isAnon && !isMe){
