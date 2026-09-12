@@ -1000,6 +1000,42 @@ async function deleteMediaChunks(collectionPath, docId, count, prefix=''){
   }
 }
 const mediaChunkCache = {};
+
+let scheduledBotPostsInterval = null;
+// Vérifie les posts de bots programmés dont l'heure est passée, et les publie réellement.
+// Ceci tourne côté client (pas de serveur ici) : la publication se fait dès qu'un client connecté
+// (n'importe quel utilisateur) est ouvert après l'heure programmée — pas de garantie à la seconde près.
+async function checkScheduledBotPosts(){
+  try{
+    const now = firebase.firestore.Timestamp.now();
+    const snap = await db.collection('scheduledBotPosts').where('scheduledFor','<=', now).get();
+    for(const d of snap.docs){
+      const sp = d.data();
+      try{
+        let mediaBase64 = sp.mediaBase64||'';
+        if(sp.mediaChunked && sp.mediaChunkCount){
+          mediaBase64 = await loadMediaChunks('scheduledBotPosts', d.id, sp.mediaChunkCount);
+        }
+        const chunked = mediaBase64.length > MEDIA_BASE64_LIMIT;
+        const ref = await db.collection('posts').add({
+          communityId: sp.communityId, communitySlug: sp.communitySlug,
+          authorUid: sp.botId, authorPseudo: sp.botPseudo, authorAvatar: sp.botAvatar||'',
+          text: sp.text||'', mediaUrl: sp.mediaUrl||'', mediaBase64: chunked? '' : mediaBase64, mediaChunked: chunked,
+          mediaType: sp.mediaType||'', videoType: sp.videoType||'', videoId: sp.videoId||'', musicUrl:'', isBotPost:true,
+          likes:[], dislikes:[],
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        if(chunked){
+          const count = await saveMediaChunks('posts', ref.id, mediaBase64);
+          await ref.update({mediaChunkCount: count});
+        }
+        if(sp.mediaChunked && sp.mediaChunkCount) await deleteMediaChunks('scheduledBotPosts', d.id, sp.mediaChunkCount);
+        await db.collection('scheduledBotPosts').doc(d.id).delete();
+      }catch(e){ console.warn('Échec de publication du post programmé', d.id, e); }
+    }
+  }catch(e){ console.warn('checkScheduledBotPosts', e); }
+}
+
 // À appeler sur un tableau de posts avant affichage : reconstruit mediaBase64 pour les posts fragmentés.
 async function resolveChunkedMedia(posts){
   const toFetch = posts.filter(p=> p.mediaChunked && p.mediaChunkCount && !mediaChunkCache[p.id]);
@@ -1522,10 +1558,14 @@ auth.onAuthStateChanged(async user=>{
     listenNotifications();
     listenUserStatus(user.uid);
     evaluateBadges(user.uid);
+    checkScheduledBotPosts();
+    if(scheduledBotPostsInterval) clearInterval(scheduledBotPostsInterval);
+    scheduledBotPostsInterval = setInterval(checkScheduledBotPosts, 60000);
     if(!location.hash) location.hash = '#home';
     router();
   }else{
     currentUser = null;
+    if(scheduledBotPostsInterval){ clearInterval(scheduledBotPostsInterval); scheduledBotPostsInterval = null; }
     document.getElementById('screen-auth').classList.remove('hidden');
     document.getElementById('topbar').classList.add('hidden');
     document.getElementById('layout').classList.add('hidden');
@@ -4989,12 +5029,18 @@ function renderBotPostForm(area, bot){
         <div class="field"><label>Texte</label><textarea id="bpText" placeholder="Quoi de neuf ?"></textarea></div>
         <div class="field"><label>🖼️🎥 Média (optionnel)</label><input type="file" id="bpMedia" accept="image/*,video/*"></div>
         <div class="field"><label>...ou lien (YouTube, vidéo directe, image)</label><input id="bpUrl" placeholder="https://..."></div>
+        <div class="field"><label>🕒 Programmer l'envoi (optionnel)</label><input type="datetime-local" id="bpSchedule"></div>
         <div id="bpWarn" class="post-meta"></div>
         <button id="bpSubmit">Publier</button>
         <button type="button" class="secondary" id="bpCancel" style="margin-left:6px;">Annuler</button>
       </div>
+    </div>
+    <div class="panel" id="bpScheduledPanel" style="margin-top:8px;">
+      <div class="panel-head">🕒 Posts programmés de ${esc(bot.pseudo)}</div>
+      <div class="panel-body" id="bpScheduledList"><div class="empty">Chargement...</div></div>
     </div>`;
   document.getElementById('bpCancel').onclick = ()=> area.innerHTML='';
+  renderScheduledBotPosts(bot);
   db.collection('communities').get().then(snap=>{
     const sel = document.getElementById('bpCommunity');
     if(!sel) return;
@@ -5011,11 +5057,17 @@ function renderBotPostForm(area, bot){
     const text = document.getElementById('bpText').value.trim();
     const file = document.getElementById('bpMedia').files[0];
     const urlInput = document.getElementById('bpUrl').value.trim();
+    const scheduleInput = document.getElementById('bpSchedule').value;
     const warn = document.getElementById('bpWarn');
     if(!slug){ warn.style.color='var(--red)'; warn.textContent='Choisis une communauté.'; return; }
     if(!text && !file && !urlInput){ warn.style.color='var(--red)'; warn.textContent='Ajoute du texte ou un média.'; return; }
+    let scheduledFor = null;
+    if(scheduleInput){
+      scheduledFor = new Date(scheduleInput);
+      if(scheduledFor.getTime() <= Date.now()){ warn.style.color='var(--red)'; warn.textContent='La date programmée doit être dans le futur.'; return; }
+    }
     const btn = document.getElementById('bpSubmit');
-    btn.disabled=true; btn.textContent='Publication...';
+    btn.disabled=true; btn.textContent = scheduledFor? 'Programmation...' : 'Publication...';
     warn.style.color='var(--text-mute)';
     try{
       let mediaUrl='', mediaType='', mediaBase64='', videoType='', videoId='';
@@ -5027,8 +5079,26 @@ function renderBotPostForm(area, bot){
         mediaBase64 = res.base64; mediaType = res.mediaType;
         videoType = mediaType==='video' ? 'mp4' : '';
       }
-      const chunked = mediaBase64.length > MEDIA_BASE64_LIMIT;
       const commDoc = await db.collection('communities').doc(slug).get();
+      if(scheduledFor){
+        const chunked = mediaBase64.length > MEDIA_BASE64_LIMIT;
+        const ref = await db.collection('scheduledBotPosts').add({
+          botId: bot.id, botPseudo: bot.pseudo, botAvatar: bot.avatar||'',
+          communityId: slug, communitySlug: commDoc.data().slug,
+          text, mediaUrl, mediaBase64: chunked? '' : mediaBase64, mediaChunked: chunked, mediaType, videoType, videoId,
+          scheduledFor: firebase.firestore.Timestamp.fromDate(scheduledFor),
+          createdBy: currentUser.uid, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        if(chunked){
+          warn.textContent = 'Envoi du média...';
+          const count = await saveMediaChunks('scheduledBotPosts', ref.id, mediaBase64);
+          await ref.update({mediaChunkCount: count});
+        }
+        toast('Post programmé pour le '+scheduledFor.toLocaleString('fr-FR')+' !');
+        area.innerHTML='';
+        return;
+      }
+      const chunked = mediaBase64.length > MEDIA_BASE64_LIMIT;
       const ref = await db.collection('posts').add({
         communityId: slug, communitySlug: commDoc.data().slug,
         authorUid: bot.id, authorPseudo: bot.pseudo, authorAvatar: bot.avatar||'',
@@ -5045,9 +5115,38 @@ function renderBotPostForm(area, bot){
       area.innerHTML='';
     }catch(err){
       warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue');
-      btn.disabled=false; btn.textContent='Publier';
+      btn.disabled=false; btn.textContent = scheduledFor? 'Programmer' : 'Publier';
     }
   };
+}
+
+function renderScheduledBotPosts(bot){
+  const list = document.getElementById('bpScheduledList');
+  if(!list) return;
+  db.collection('scheduledBotPosts').where('botId','==',bot.id).orderBy('scheduledFor','asc').get().then(snap=>{
+    if(!document.getElementById('bpScheduledList')) return;
+    if(snap.empty){ list.innerHTML = '<div class="empty">Aucun post programmé.</div>'; return; }
+    list.innerHTML = '';
+    snap.forEach(d=>{
+      const sp = d.data();
+      const row = document.createElement('div');
+      row.className = 'live-join-row';
+      const when = sp.scheduledFor? sp.scheduledFor.toDate().toLocaleString('fr-FR') : '?';
+      row.innerHTML = `<div><b>🕒 ${esc(when)}</b><div class="post-meta">y/${esc(sp.communitySlug)} · ${esc((sp.text||'').slice(0,60))}</div></div>`;
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'danger small'; cancelBtn.textContent = 'Annuler';
+      cancelBtn.onclick = async ()=>{
+        if(!confirm('Annuler ce post programmé ?')) return;
+        if(sp.mediaChunked && sp.mediaChunkCount) await deleteMediaChunks('scheduledBotPosts', d.id, sp.mediaChunkCount);
+        await db.collection('scheduledBotPosts').doc(d.id).delete();
+        renderScheduledBotPosts(bot);
+      };
+      row.appendChild(cancelBtn);
+      list.appendChild(row);
+    });
+  }).catch(err=>{
+    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message||'erreur inconnue')+'</div>';
+  });
 }
 
 /* ---------------- PROFILE ---------------- */
