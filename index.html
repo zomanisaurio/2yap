@@ -163,6 +163,20 @@
 
   /* LAYOUT */
   #layout{max-width:640px; margin:0 auto; padding:14px 12px 60px;}
+
+  /* BANNIÈRE PUB */
+  #adBanner{
+    position:fixed; left:0; right:0; bottom:0; z-index:60;
+    background:var(--panel); border-top:1px solid var(--border);
+    display:flex; align-items:center; gap:8px; padding:8px 12px;
+    box-shadow:0 -2px 10px rgba(0,0,0,0.06);
+  }
+  #adBannerInner{flex:1; min-width:0; display:flex; align-items:center; gap:8px; overflow:hidden;}
+  #adBanner .ad-label{font-size:10px; font-weight:700; color:var(--text-mute); border:1px solid var(--border); border-radius:5px; padding:1px 5px; flex-shrink:0;}
+  #adBanner .ad-placeholder{font-size:12.5px; color:var(--text-mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  #adBannerClose{background:none; box-shadow:none; color:var(--text-mute); padding:4px 6px; font-size:14px; flex-shrink:0;}
+  body.has-ad-banner #layout{padding-bottom:66px;}
+  body.has-ad-banner #immersiveFeed{margin-bottom:52px;}
   #main-col{min-width:0;}
   .panel{
     background:var(--panel); border:1px solid var(--border); border-radius:14px;
@@ -329,6 +343,25 @@
     border-bottom:2.5px solid transparent; border-radius:0; padding:10px 8px;
   }
   .comm-tabs button.on{color:var(--primary); border-bottom-color:var(--primary);}
+
+  /* ÉVÉNEMENTS DE COMMUNAUTÉ */
+  .event-card{border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:12px; cursor:pointer;}
+  .event-banner{
+    height:160px; background-size:cover; background-position:center;
+    display:flex; align-items:flex-end; padding:14px; position:relative; overflow:hidden;
+  }
+  .event-banner.detail{height:220px;}
+  .event-banner .title{
+    background:rgba(20,20,30,0.55); color:#fff; padding:6px 12px; border-radius:8px;
+    font-size:18px; font-weight:800; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); position:relative; z-index:2;
+  }
+  .event-overlay-gif{position:absolute; max-width:80px; max-height:80px; z-index:1; pointer-events:none;}
+  .event-overlay-gif.pos-top-left{top:8px; left:8px;}
+  .event-overlay-gif.pos-top-right{top:8px; right:8px;}
+  .event-overlay-gif.pos-bottom-left{bottom:8px; left:8px;}
+  .event-overlay-gif.pos-bottom-right{bottom:8px; right:8px;}
+  .event-overlay-gif.pos-center{top:50%; left:50%; transform:translate(-50%,-50%);}
+  .event-body{padding:10px 14px;}
 
   /* GRID for explore */
   .grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); gap:10px; padding:14px;}
@@ -508,6 +541,7 @@
     <a class="navlink" data-nav href="#people"><span class="ic">👥</span> Personnes</a>
     <a class="navlink" data-nav href="#create-community"><span class="ic">➕</span> Créer y/communauté</a>
     <a class="navlink" data-nav href="#gif-packs"><span class="ic">🎞️</span> GIFs</a>
+    <a class="navlink" data-nav href="#inventory"><span class="ic">🎒</span> Mon inventaire</a>
     <a class="navlink" data-nav href="#leaderboard"><span class="ic">🏆</span> Classement Yappers</a>
     <a class="navlink" data-nav href="#messages"><span class="ic">✉️</span> Messages</a>
     <a class="navlink" id="myProfileLink" data-nav href="#profile"><span class="ic">👤</span> Mon profil</a>
@@ -563,6 +597,16 @@
 <!-- MAIN APP -->
 <div id="layout" class="hidden">
   <div id="main-col"></div>
+</div>
+
+<!-- BANNIÈRE PUB — remplace le contenu de #adBannerInner par ton vrai script/tag publicitaire
+     (ex: AdSense, une régie tierce...). Le bouton ✕ permet de la fermer pour la session en cours. -->
+<div id="adBanner" class="hidden">
+  <div id="adBannerInner">
+    <span class="ad-label">Publicité</span>
+    <span class="ad-placeholder">📦 Emplacement publicitaire — 2Yap reste gratuit grâce à toi 🙏</span>
+  </div>
+  <button id="adBannerClose" title="Fermer">✕</button>
 </div>
 
 <div id="commentsOverlay"></div>
@@ -741,6 +785,89 @@ function toast(msg){
 function esc(s){
   return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// Traduit une erreur Firestore en message compréhensible — en particulier le quota gratuit
+// (plan Spark) épuisé pour la journée, qui bloque les LECTURES bien avant les écritures.
+function friendlyFirestoreError(err){
+  const msg = (err && err.message) || '';
+  if((err && err.code==='resource-exhausted') || /quota/i.test(msg) || /RESOURCE_EXHAUSTED/i.test(msg)){
+    return 'Le quota gratuit Firebase est épuisé pour aujourd\'hui (ça se réinitialise chaque jour vers minuit heure du Pacifique).';
+  }
+  return msg || 'Erreur inconnue';
+}
+
+/* ================================================================
+   CACHE HORS-LIGNE DES POSTS (IndexedDB)
+   Chaque post vu passe par ici. Si Firestore ne répond plus (quota épuisé,
+   pas de réseau...), on relit ce cache local pour continuer à afficher les
+   posts déjà rencontrés. Les vidéos/audios stockés en base64 (donc pas via
+   un lien externe) sont trop lourds pour ce cache : seul le texte/les infos
+   du post sont gardés pour eux, pas le média — les posts en lien externe
+   (mediaUrl) restent, eux, entièrement lisibles hors-ligne.
+   ================================================================ */
+const OFFLINE_DB_NAME = 'yap_offline_cache';
+const OFFLINE_DB_VERSION = 1;
+let offlineDBPromise = null;
+function openOfflineDB(){
+  if(offlineDBPromise) return offlineDBPromise;
+  offlineDBPromise = new Promise((resolve, reject)=>{
+    if(!window.indexedDB){ reject(new Error('IndexedDB indisponible')); return; }
+    const req = indexedDB.open(OFFLINE_DB_NAME, OFFLINE_DB_VERSION);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains('posts')){
+        const store = db.createObjectStore('posts', {keyPath:'id'});
+        store.createIndex('communityId', 'communityId', {unique:false});
+      }
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+  return offlineDBPromise;
+}
+function fakeTimestamp(millis){
+  return {toMillis:()=>millis, toDate:()=> new Date(millis)};
+}
+// Sauvegarde une liste de posts dans le cache local (silencieux en cas d'échec — c'est un bonus, pas critique).
+async function cachePostsOffline(posts){
+  if(!posts || !posts.length) return;
+  try{
+    const db = await openOfflineDB();
+    const tx = db.transaction('posts', 'readwrite');
+    const store = tx.objectStore('posts');
+    posts.forEach(p=>{
+      const copy = {...p};
+      const isUnlinkedHeavyMedia = (copy.mediaType==='audio' || copy.mediaType==='video') && !copy.mediaUrl;
+      if(isUnlinkedHeavyMedia){
+        delete copy.mediaBase64;
+        copy.offlineMediaUnavailable = true;
+      }
+      copy.createdAt = copy.createdAt ? (copy.createdAt.toMillis ? copy.createdAt.toMillis() : copy.createdAt) : Date.now();
+      store.put(copy);
+    });
+    await new Promise((res, rej)=>{ tx.oncomplete = res; tx.onerror = ()=> rej(tx.error); });
+  }catch(e){ console.warn('cachePostsOffline', e); }
+}
+// Relit le cache local, avec un filtre optionnel. Reconstruit createdAt pour rester compatible
+// avec timeAgo() et les tris existants qui attendent un objet Timestamp-like.
+async function getOfflinePosts(filterFn){
+  try{
+    const db = await openOfflineDB();
+    const posts = await new Promise((resolve, reject)=>{
+      const tx = db.transaction('posts', 'readonly');
+      const req = tx.objectStore('posts').getAll();
+      req.onsuccess = ()=> resolve(req.result || []);
+      req.onerror = ()=> reject(req.error);
+    });
+    let result = posts.map(p=> ({...p, createdAt: fakeTimestamp(p.createdAt)}));
+    if(filterFn) result = result.filter(filterFn);
+    result.sort((a,b)=> b.createdAt.toMillis() - a.createdAt.toMillis());
+    return result;
+  }catch(e){ console.warn('getOfflinePosts', e); return []; }
+}
+function offlineBannerHtml(){
+  return '<div class="post-meta" style="padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg);">📴 Hors-ligne (quota Firebase épuisé ou pas de réseau) — affichage des posts déjà enregistrés sur cet appareil.</div>';
+}
+
 function fmtTime(s){
   if(!isFinite(s)||s<0) return '0:00';
   const m=Math.floor(s/60), sec=Math.floor(s%60);
@@ -1226,7 +1353,7 @@ function openComments(postId){
       top.forEach(cm=>{
         list.appendChild(renderCommentNode(cm, repliesOf(cm.id)));
       });
-    }, err=>{ list.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>'; });
+    }, err=>{ list.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>'; });
 }
 
 function renderCommentNode(cm, replies){
@@ -1295,7 +1422,7 @@ async function deleteComment(commentId){
       await batch.commit();
     }
     await db.collection('posts').doc(postId).collection('comments').doc(commentId).delete();
-  }catch(err){ toast('Erreur : '+(err.message||'erreur inconnue')); }
+  }catch(err){ toast('Erreur : '+(friendlyFirestoreError(err))); }
 }
 function closeComments(){
   document.getElementById('commentsOverlay').classList.remove('open');
@@ -1454,7 +1581,7 @@ document.getElementById('reportSubmitBtn').onclick = async ()=>{
     closeReport();
   }catch(err){
     msg.style.color='var(--red)';
-    msg.textContent = 'Erreur : '+(err.message||'erreur inconnue');
+    msg.textContent = 'Erreur : '+(friendlyFirestoreError(err));
   }
 };
 
@@ -1514,6 +1641,11 @@ document.getElementById('loginBtn').onclick = async ()=>{
   }catch(e){ msgEl.textContent = translateErr(e); }
 };
 document.getElementById('logoutBtn').onclick = ()=> auth.signOut();
+document.getElementById('adBannerClose').onclick = ()=>{
+  document.getElementById('adBanner').classList.add('hidden');
+  document.body.classList.remove('has-ad-banner');
+  sessionStorage.setItem('adBannerClosed','1');
+};
 
 function translateErr(e){
   const c = e.code||'';
@@ -1551,6 +1683,10 @@ auth.onAuthStateChanged(async user=>{
     document.getElementById('screen-auth').classList.add('hidden');
     document.getElementById('topbar').classList.remove('hidden');
     document.getElementById('layout').classList.remove('hidden');
+    if(!sessionStorage.getItem('adBannerClosed')){
+      document.getElementById('adBanner').classList.remove('hidden');
+      document.body.classList.add('has-ad-banner');
+    }
     updateTopbarAvatar();
     document.getElementById('adminLink').classList.toggle('hidden', !isAdmin());
     document.getElementById('botsLink').classList.toggle('hidden', !isAdmin());
@@ -1607,6 +1743,7 @@ function router(){
   else if(route==='leaderboard'){ renderLeaderboard(main); }
   else if(route==='support'){ renderSupport(main); }
   else if(route==='catbox'){ renderCatbox(main); }
+  else if(route==='inventory'){ renderInventory(main); }
   else { renderHome(main); }
 }
 
@@ -1729,7 +1866,7 @@ function listenMyCommunities(){
     }, err=>{
       console.error(err);
       const list = document.getElementById('myCommunitiesList');
-      if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+      if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
     });
 }
 
@@ -1777,13 +1914,23 @@ async function renderMyCommunitiesList(list, joined){
 
 /* ---------------- HOME FEED ---------------- */
 function renderHome(main){
-  main.innerHTML = '<div class="panel"><div class="panel-head">Fil d\'actualité</div><div class="panel-body" id="feedBody"><div class="empty">Chargement...</div></div></div>';
-  buildHomeFeedCommunityPool().then(poolIds=> subscribeHomeFeed(poolIds));
+  main.innerHTML = '<div class="panel"><div class="panel-head">Fil d\'actualité <button class="secondary small" id="refreshHomeBtn" style="float:right;">🔄 Actualiser</button></div><div class="panel-body" id="feedBody"><div class="empty">Chargement...</div></div></div>';
+  document.getElementById('refreshHomeBtn').onclick = loadHomeFeed;
+  loadHomeFeed();
+}
+
+function loadHomeFeed(){
+  const body = document.getElementById('feedBody');
+  if(body) body.innerHTML = '<div class="empty">Chargement...</div>';
+  buildHomeFeedCommunityPool().then(poolIds=> fetchHomeFeed(poolIds));
 }
 
 async function buildHomeFeedCommunityPool(){
-  const joinedSnap = await db.collection('communities').where('members','array-contains',currentUser.uid).get();
-  const poolIds = []; joinedSnap.forEach(d=> poolIds.push(d.id));
+  let poolIds = [];
+  try{
+    const joinedSnap = await db.collection('communities').where('members','array-contains',currentUser.uid).get();
+    joinedSnap.forEach(d=> poolIds.push(d.id));
+  }catch(e){ console.warn('pool fil d\'actualité (communautés rejointes)', e); return poolIds; }
   if(poolIds.length < 3){
     try{
       const need = 3 - poolIds.length;
@@ -1797,29 +1944,40 @@ async function buildHomeFeedCommunityPool(){
   return poolIds;
 }
 
-function subscribeHomeFeed(poolIds){
-  const un = db.collection('posts').orderBy('createdAt','desc').limit(100).onSnapshot(async snap=>{
-    const body = document.getElementById('feedBody');
+// Chargement ponctuel (pas de onSnapshot temps réel) : sur le plan gratuit Spark, un fil en écoute
+// permanente peut vite consommer le quota de lectures Firestore. On charge une fois, et l'utilisateur
+// rafraîchit lui-même via le bouton 🔄 (ou en revenant sur l'onglet).
+async function fetchHomeFeed(poolIds){
+  const body = document.getElementById('feedBody');
+  try{
+    const snap = await db.collection('posts').orderBy('createdAt','desc').limit(100).get();
     if(!body) return;
     let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
     if(poolIds.length) posts = posts.filter(p=> poolIds.includes(p.communityId));
     posts = posts.slice(0, 40);
     if(posts.length===0){ body.innerHTML='<div class="empty">Aucun post. Rejoins ou crée une communauté !</div>'; return; }
     await resolveChunkedMedia(posts);
+    cachePostsOffline(posts);
     if(!document.getElementById('feedBody')) return; // la page a changé pendant le chargement
     body.innerHTML='';
     posts.forEach(p=> body.appendChild(renderPostCard(p.id, p)));
-  }, err=>{
+  }catch(err){
     console.error(err);
-    const body = document.getElementById('feedBody');
-    if(body) body.innerHTML = '<div class="empty">Erreur de chargement : '+esc(err.message)+'</div>';
-  });
-  unsubscribers.push(un);
+    const offline = await getOfflinePosts(p=> !poolIds.length || poolIds.includes(p.communityId));
+    if(!document.getElementById('feedBody')) return;
+    if(offline.length){
+      body.innerHTML = offlineBannerHtml();
+      offline.forEach(p=> body.appendChild(renderPostCard(p.id, p)));
+    } else {
+      body.innerHTML = '<div class="empty">Erreur de chargement : '+esc(friendlyFirestoreError(err))+'</div>';
+    }
+  }
 }
 
 function renderPostCard(id, p){
   const div = document.createElement('div');
   div.className = 'post';
+  div.dataset.id = id;
   const liked = (p.likes||[]).includes(currentUser.uid);
   const disliked = (p.dislikes||[]).includes(currentUser.uid);
   div.innerHTML = `
@@ -1831,10 +1989,12 @@ function renderPostCard(id, p){
       </div>
     </div>
     ${p.text? `<div class="post-text">${esc(p.text)}</div>`:''}
+    ${p.offlineMediaUnavailable? `<div class="post-meta" style="padding:8px;background:var(--bg);border-radius:8px;">📴 Média non disponible hors-ligne (${p.mediaType==='audio'?'audio':'vidéo'} enregistré directement, pas via un lien).</div>` : `
     ${p.mediaType==='video' && p.videoType==='youtube'? youtubeEmbedHtml(p.videoId) : ''}
     ${p.mediaType==='video' && p.videoType!=='youtube'? videoPlayerHtml(p.mediaUrl||p.mediaBase64, p.musicUrl) : ''}
     ${p.mediaType==='image'? `<img class="post-image" src="${p.mediaUrl||p.mediaBase64}">` : ''}
     ${p.mediaType==='audio'? audioPlayerHtml(p) : ''}
+    `}
     <div class="post-actions">
       <button class="vote-btn ${liked?'active-like':''}" data-act="like">👍 ${(p.likes||[]).length}</button>
       <button class="vote-btn ${disliked?'active-dislike':''}" data-act="dislike">👎 ${(p.dislikes||[]).length}</button>
@@ -1850,7 +2010,7 @@ function renderPostCard(id, p){
       if(btn.dataset.act==='comments') openComments(id);
       else if(btn.dataset.act==='delete') deletePost(id);
       else if(btn.dataset.act==='report') openReport(p.authorUid, p.authorPseudo, 'post', id);
-      else vote(id, btn.dataset.act);
+      else { optimisticVoteUpdate(div, p, btn.dataset.act); vote(id, btn.dataset.act); }
     };
   });
   db.collection('posts').doc(id).collection('comments').get().then(s=>{
@@ -1882,10 +2042,34 @@ async function deletePost(postId){
       if(pd.mediaChunked && pd.mediaChunkCount) deleteMediaChunks('posts', postId, pd.mediaChunkCount);
     }
     toast('Post supprimé.');
+    document.querySelectorAll('[data-id="'+postId+'"]').forEach(el=>{
+      if(el.classList.contains('post') || el.classList.contains('immersive-item')) el.remove();
+    });
+    document.querySelectorAll('#communityFeed iframe').forEach(f=>{
+      f.contentWindow?.postMessage({type:'removePost', id:postId}, '*');
+    });
   }catch(err){
     playSound('error');
-    toast('Erreur : '+(err.message||'erreur inconnue'));
+    toast('Erreur : '+(friendlyFirestoreError(err)));
   }
+}
+
+// Met à jour l'affichage local du like/dislike immédiatement (sans attendre un listener temps réel),
+// pendant que vote() écrit en arrière-plan.
+function optimisticVoteUpdate(div, p, act){
+  const uid = currentUser.uid;
+  p.likes = p.likes||[]; p.dislikes = p.dislikes||[];
+  if(act==='like'){
+    if(p.likes.includes(uid)) p.likes = p.likes.filter(u=>u!==uid);
+    else { p.likes = [...p.likes, uid]; p.dislikes = p.dislikes.filter(u=>u!==uid); }
+  } else {
+    if(p.dislikes.includes(uid)) p.dislikes = p.dislikes.filter(u=>u!==uid);
+    else { p.dislikes = [...p.dislikes, uid]; p.likes = p.likes.filter(u=>u!==uid); }
+  }
+  const likeBtn = div.querySelector('[data-act="like"]');
+  const dislikeBtn = div.querySelector('[data-act="dislike"]');
+  if(likeBtn){ likeBtn.textContent = '👍 '+p.likes.length; likeBtn.classList.toggle('active-like', p.likes.includes(uid)); }
+  if(dislikeBtn){ dislikeBtn.textContent = '👎 '+p.dislikes.length; dislikeBtn.classList.toggle('active-dislike', p.dislikes.includes(uid)); }
 }
 
 async function vote(postId, act){
@@ -2003,7 +2187,7 @@ function renderLeaderboard(main){
     });
   }).catch(err=>{
     const body = document.getElementById('leaderboardBody');
-    if(body) body.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+    if(body) body.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
   });
 }
 
@@ -2077,7 +2261,7 @@ function renderSupport(main){
       await auth.sendPasswordResetEmail(currentUser.email);
       toast('E-mail de réinitialisation envoyé à '+currentUser.email);
     }catch(err){
-      toast('Erreur : '+(err.message||'erreur inconnue'));
+      toast('Erreur : '+(friendlyFirestoreError(err)));
     }
     btn.disabled = false;
   };
@@ -2108,6 +2292,112 @@ function renderCatbox(main){
     </div>`;
 }
 
+/* ---------------- MON INVENTAIRE (vidéos/audios à lien réutilisables dans les posts) ---------------- */
+async function renderInventory(main){
+  main.innerHTML = `
+    <div class="panel">
+      <div class="panel-head">🎒 Mon inventaire</div>
+      <div class="panel-body">
+        <div class="post-text">Enregistre ici tes liens vidéo/audio (ex: depuis Catbox) pour les réutiliser en un clic dans tes posts, sans avoir à recopier l'URL à chaque fois.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">+ Ajouter un lien</div>
+      <div class="panel-body">
+        <div class="field"><label>Type</label>
+          <select id="invType"><option value="video">🎥 Vidéo</option><option value="audio">🎵 Audio</option></select>
+        </div>
+        <div class="field"><label>Titre</label><input id="invTitle" placeholder="ex: Intro épisode 1" maxlength="60"></div>
+        <div class="field"><label>Lien</label><input id="invUrl" placeholder="https://files.catbox.moe/xxxxx.mp4"></div>
+        <button id="invAddBtn" class="small">Ajouter</button>
+        <div id="invMsg" style="color:var(--red);margin-top:6px;"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">🎥 Mes vidéos</div>
+      <div class="panel-body" id="invVideoList"><div class="empty">Chargement...</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">🎵 Mes audios</div>
+      <div class="panel-body" id="invAudioList"><div class="empty">Chargement...</div></div>
+    </div>`;
+  document.getElementById('invAddBtn').onclick = async ()=>{
+    const type = document.getElementById('invType').value;
+    const title = document.getElementById('invTitle').value.trim();
+    const url = document.getElementById('invUrl').value.trim();
+    const msg = document.getElementById('invMsg');
+    if(!title){ msg.textContent='Ajoute un titre.'; return; }
+    if(!/^https?:\/\//i.test(url)){ msg.textContent='Lien invalide (doit commencer par http:// ou https://).'; return; }
+    msg.textContent='';
+    await db.collection('users').doc(currentUser.uid).collection('inventory').add({
+      title, url, mediaType:type, addedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    document.getElementById('invTitle').value=''; document.getElementById('invUrl').value='';
+    loadInventoryLists();
+  };
+  loadInventoryLists();
+}
+async function loadInventoryLists(){
+  try{
+    const snap = await db.collection('users').doc(currentUser.uid).collection('inventory').orderBy('addedAt','desc').get();
+    const items = []; snap.forEach(d=> items.push({id:d.id, ...d.data()}));
+    renderInventoryList('invVideoList', items.filter(i=>i.mediaType==='video'));
+    renderInventoryList('invAudioList', items.filter(i=>i.mediaType==='audio'));
+  }catch(err){
+    ['invVideoList','invAudioList'].forEach(id=>{
+      const el = document.getElementById(id);
+      if(el) el.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
+    });
+  }
+}
+function renderInventoryList(containerId, items){
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  if(!items.length){ el.innerHTML = '<div class="empty">Rien pour l\'instant.</div>'; return; }
+  el.innerHTML = '';
+  items.forEach(item=>{
+    const row = document.createElement('div');
+    row.className = 'live-join-row';
+    row.innerHTML = `<div><b>${esc(item.title)}</b><div class="post-meta" style="word-break:break-all;">${esc(item.url)}</div></div>`;
+    const delBtn = document.createElement('button');
+    delBtn.className = 'danger small'; delBtn.textContent = '🗑️';
+    delBtn.onclick = async ()=>{
+      if(!confirm('Supprimer "'+item.title+'" de ton inventaire ?')) return;
+      await db.collection('users').doc(currentUser.uid).collection('inventory').doc(item.id).delete();
+      loadInventoryLists();
+    };
+    row.appendChild(delBtn);
+    el.appendChild(row);
+  });
+}
+// Petit sélecteur réutilisable : ouvre la liste d'inventaire (vidéo ou audio) juste sous un bouton,
+// et remplit le champ ciblé au clic sur un élément.
+async function openInventoryPicker(mediaType, targetInputId, wrapperEl){
+  if(wrapperEl.innerHTML){ wrapperEl.innerHTML=''; return; }
+  wrapperEl.innerHTML = '<div class="empty">Chargement...</div>';
+  try{
+    const snap = await db.collection('users').doc(currentUser.uid).collection('inventory')
+      .orderBy('addedAt','desc').get();
+    const items = []; snap.forEach(d=>{ if(d.data().mediaType===mediaType) items.push(d.data()); });
+    if(items.length===0){ wrapperEl.innerHTML = '<div class="empty">Ton inventaire '+(mediaType==='video'?'vidéo':'audio')+' est vide. <a href="#inventory">Ajoutes-en un</a>.</div>'; return; }
+    wrapperEl.innerHTML = '';
+    items.forEach(item=>{
+      const row = document.createElement('div');
+      row.className = 'live-join-row';
+      row.style.cursor = 'pointer';
+      row.innerHTML = `<div><b>${esc(item.title)}</b></div>`;
+      row.onclick = ()=>{
+        const input = document.getElementById(targetInputId);
+        if(input) input.value = item.url;
+        wrapperEl.innerHTML = '';
+      };
+      wrapperEl.appendChild(row);
+    });
+  }catch(err){
+    wrapperEl.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
+  }
+}
+
 /* ---------------- PEOPLE SEARCH ---------------- */
 function renderPeople(main){
   main.innerHTML = `
@@ -2126,7 +2416,7 @@ function renderPeople(main){
       try{
         const snap = await db.collection('users').limit(300).get();
         allUsersCache = []; snap.forEach(d=> allUsersCache.push({id:d.id, ...d.data()}));
-      }catch(err){ list.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>'; return; }
+      }catch(err){ list.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>'; return; }
     }
     const matches = allUsersCache.filter(u=> u.id!==currentUser.uid && (u.pseudo||'').toLowerCase().includes(q));
     if(matches.length===0){ list.innerHTML = '<div class="empty">Personne ne correspond.</div>'; return; }
@@ -2143,37 +2433,56 @@ function renderPeople(main){
 
 /* ---------------- GLOBAL SCROLL (toutes tes communautés, façon TikTok) ---------------- */
 function renderScroll(main){
-  main.innerHTML = '<div class="panel"><div class="panel-head">🎬 Scroll — le court de tes communautés</div><div class="panel-body" id="scrollBody" style="padding:0;"><div class="empty">Chargement...</div></div></div>';
+  main.innerHTML = '<div class="panel"><div class="panel-head">🎬 Scroll — le court de tes communautés <button class="secondary small" id="refreshScrollBtn" style="float:right;">🔄</button></div><div class="panel-body" id="scrollBody" style="padding:0;"><div class="empty">Chargement...</div></div></div>';
   scrollBatchSize = 20;
+  document.getElementById('refreshScrollBtn').onclick = ()=> renderScroll(main);
   db.collection('communities').where('members','array-contains',currentUser.uid).get().then(csnap=>{
     const ids = []; csnap.forEach(d=> ids.push(d.id));
     const body = document.getElementById('scrollBody');
     if(!body) return;
     if(ids.length===0){ body.innerHTML = '<div class="empty">Rejoins une communauté pour voir son contenu ici.</div>'; return; }
-    subscribeScrollFeed(ids);
-  }).catch(err=>{
+    fetchScrollFeed(ids);
+  }).catch(async err=>{
+    console.error(err);
     const b = document.getElementById('scrollBody');
-    if(b) b.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+    const offline = (await getOfflinePosts(p=> (p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image'))
+      .filter(p=> !p.offlineMediaUnavailable);
+    if(offline.length && b){
+      b.innerHTML = offlineBannerHtml() + '<div id="immersiveOfflineWrap"></div>';
+      renderImmersiveFeed(document.getElementById('immersiveOfflineWrap'), offline, null);
+    } else if(b){
+      b.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
+    }
   });
 }
 
-function subscribeScrollFeed(ids){
-  const un = db.collection('posts').orderBy('createdAt','desc').limit(scrollBatchSize).onSnapshot(async snap=>{
+// Chargement ponctuel (pas de onSnapshot temps réel), pour économiser les lectures Firestore.
+// Le défilement infini réutilise le même mécanisme, juste en augmentant la limite à chaque fois.
+async function fetchScrollFeed(ids){
+  try{
+    const snap = await db.collection('posts').orderBy('createdAt','desc').limit(scrollBatchSize).get();
     const reachedEnd = snap.size < scrollBatchSize;
     let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
     posts = posts.filter(p=> ids.includes(p.communityId) && ((p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image'));
     await resolveChunkedMedia(posts);
+    cachePostsOffline(posts);
     const container = document.getElementById('scrollBody');
     if(container) renderImmersiveFeed(container, posts, reachedEnd? null : ()=>{
       scrollBatchSize += 20;
-      subscribeScrollFeed(ids);
+      fetchScrollFeed(ids);
     });
-  }, err=>{
+  }catch(err){
     console.error(err);
-    const b = document.getElementById('scrollBody');
-    if(b) b.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
-  });
-  unsubscribers.push(un);
+    const container = document.getElementById('scrollBody');
+    const offline = (await getOfflinePosts(p=> ids.includes(p.communityId) && ((p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image')))
+      .filter(p=> !p.offlineMediaUnavailable);
+    if(offline.length && container){
+      container.innerHTML = offlineBannerHtml() + '<div id="immersiveOfflineWrap"></div>';
+      renderImmersiveFeed(document.getElementById('immersiveOfflineWrap'), offline, null);
+    } else if(container){
+      container.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
+    }
+  }
 }
 
 /* ---------------- EXPLORE ---------------- */
@@ -2491,7 +2800,7 @@ function renderCommunitySettings(main, slug){
         await db.collection('communities').doc(slug).update(update);
         toast('Paramètres enregistrés.');
         location.hash = '#community/'+slug;
-      }catch(err){ msg.textContent = 'Erreur : '+(err.message||'erreur inconnue'); }
+      }catch(err){ msg.textContent = 'Erreur : '+(friendlyFirestoreError(err)); }
     };
     document.getElementById('ecDelete').onclick = async ()=>{
       if(!confirm('Supprimer définitivement y/'+c.slug+' et tous ses posts ? Cette action est irréversible.')) return;
@@ -2503,7 +2812,7 @@ function renderCommunitySettings(main, slug){
         await db.collection('communities').doc(slug).delete();
         toast('Communauté supprimée.');
         location.hash = '#explore';
-      }catch(err){ toast('Erreur : '+(err.message||'erreur inconnue')); }
+      }catch(err){ toast('Erreur : '+(friendlyFirestoreError(err))); }
     };
   });
 }
@@ -2567,7 +2876,9 @@ function renderCommunity(main, slug){
           <button class="tab-video" data-tab="video">🎬 Court</button>
           <button class="tab-games" data-tab="games">🎮 Mini-jeux</button>
           <button class="tab-media" data-tab="media">🎞️ Films & Séries</button>
+          <button class="tab-events" data-tab="events">🎉 Événements</button>
           <button class="tab-subs" data-tab="subs">🧩 Sous-commus</button>
+          <button class="secondary small" id="refreshFeedBtn" style="margin-left:auto;flex-shrink:0;">🔄</button>
         </div>
         <div id="newPostArea"></div>
         <div id="communityFeed"><div class="empty">Chargement...</div></div>
@@ -2595,17 +2906,25 @@ function renderCommunity(main, slug){
     document.getElementById('newAudioBtn')?.addEventListener('click', ()=> toggleNewAudioPost(slug, c));
     document.getElementById('hubBtn')?.addEventListener('click', ()=> location.hash = '#hub/'+slug);
     document.getElementById('settingsBtn')?.addEventListener('click', ()=> location.hash = '#community-settings/'+slug);
-    main.querySelectorAll('.comm-tabs button').forEach(btn=>{
+    main.querySelectorAll('.comm-tabs button[data-tab]').forEach(btn=>{
       btn.onclick = ()=>{
-        main.querySelectorAll('.comm-tabs button').forEach(b=>b.classList.remove('on'));
+        main.querySelectorAll('.comm-tabs button[data-tab]').forEach(b=>b.classList.remove('on'));
         btn.classList.add('on');
         communityTab = btn.dataset.tab;
         if(communityTab==='games'){ renderCommunityGames(document.getElementById('communityFeed'), slug, c, cAdmin); }
         else if(communityTab==='media'){ renderCommunityMedia(document.getElementById('communityFeed'), slug, c, cAdmin); }
+        else if(communityTab==='events'){ renderCommunityEvents(document.getElementById('communityFeed'), slug, c, cAdmin); }
         else if(communityTab==='subs'){ renderCommunitySubs(document.getElementById('communityFeed'), slug, c, cAdmin, isMember); }
         else { listenCommunityFeed(slug, c); }
       };
     });
+    document.getElementById('refreshFeedBtn').onclick = ()=>{
+      if(communityTab==='games'){ renderCommunityGames(document.getElementById('communityFeed'), slug, c, cAdmin); }
+      else if(communityTab==='media'){ renderCommunityMedia(document.getElementById('communityFeed'), slug, c, cAdmin); }
+      else if(communityTab==='events'){ renderCommunityEvents(document.getElementById('communityFeed'), slug, c, cAdmin); }
+      else if(communityTab==='subs'){ renderCommunitySubs(document.getElementById('communityFeed'), slug, c, cAdmin, isMember); }
+      else { listenCommunityFeed(slug, c); }
+    };
     listenCommunityFeed(slug, c);
   });
 }
@@ -2645,11 +2964,16 @@ function toggleNewPost(slug, c){
       <div class="field"><textarea id="npText" placeholder="Quoi de neuf ?"></textarea></div>
       <div class="field"><label>🏷️ Sous-tranche (optionnel)</label><select id="npSub"><option value="">— Aucune —</option></select></div>
       <div class="field"><label>Photo, GIF ou vidéo courte (optionnel)</label><input id="npMedia" type="file" accept="video/*,image/*"></div>
-      <div class="field"><label>...ou colle un lien (vidéo directe, YouTube, ou image)</label><input id="npMediaUrl" placeholder="https://youtube.com/watch?v=... ou https://.../video.mp4"></div>
+      <div class="field"><label>...ou colle un lien (vidéo directe, YouTube, ou image)</label>
+        <input id="npMediaUrl" placeholder="https://youtube.com/watch?v=... ou https://.../video.mp4">
+        <button type="button" class="secondary small" id="npInvBtn" style="margin-top:6px;align-self:flex-start;">🎒 Depuis mon inventaire</button>
+        <div id="npInvPicker"></div>
+      </div>
       <div class="field hidden" id="npMusicField"><label>🎵 Lien musique (URL audio, optionnel — pour le format Court)</label><input id="npMusic" placeholder="https://.../musique.mp3"></div>
       <div id="videoWarn"></div>
       <button id="npSubmit">Publier</button>
     </div>`;
+  document.getElementById('npInvBtn').onclick = ()=> openInventoryPicker('video', 'npMediaUrl', document.getElementById('npInvPicker'));
   db.collection('communities').doc(slug).collection('subs').orderBy('createdAt','asc').get().then(snap=>{
     const sel = document.getElementById('npSub');
     if(!sel) return;
@@ -2743,6 +3067,7 @@ function toggleNewPost(slug, c){
     await incrementUserStat(currentUser.uid, 'postsCount', 1);
     evaluateBadges(currentUser.uid);
     area.innerHTML=''; playSound('publish'); toast('Post publié ! +'+yGain+' Yappers 🪙');
+    listenCommunityFeed(slug, c);
   };
 }
 
@@ -2752,6 +3077,11 @@ function toggleNewAudioPost(slug, c){
   area.innerHTML = `
     <div class="panel-body" style="border-top:1px solid var(--border);">
       <div class="field"><label>🎵 Fichier audio (mp3, m4a...)</label><input type="file" id="naFile" accept="audio/*"></div>
+      <div class="field"><label>...ou colle un lien audio</label>
+        <input id="naUrl" placeholder="https://files.catbox.moe/xxxxx.mp3">
+        <button type="button" class="secondary small" id="naInvBtn" style="margin-top:6px;align-self:flex-start;">🎒 Depuis mon inventaire</button>
+        <div id="naInvPicker"></div>
+      </div>
       <div class="field"><label>Titre</label><input id="naTitle" placeholder="ex: Ma reprise"></div>
       <div class="field"><label>Artiste</label><input id="naArtist" placeholder="ex: ${esc(currentUser.pseudo)}" value="${esc(currentUser.pseudo)}"></div>
       <div class="field"><label>Description (optionnel)</label><textarea id="naDesc" placeholder="Quelques mots sur ce morceau..."></textarea></div>
@@ -2765,8 +3095,10 @@ function toggleNewAudioPost(slug, c){
       <div id="naWarn" class="post-meta"></div>
       <button id="naSubmit">Publier l'audio</button>
     </div>`;
+  document.getElementById('naInvBtn').onclick = ()=> openInventoryPicker('audio', 'naUrl', document.getElementById('naInvPicker'));
   document.getElementById('naSubmit').onclick = async ()=>{
     const file = document.getElementById('naFile').files[0];
+    const urlInput = document.getElementById('naUrl').value.trim();
     const title = document.getElementById('naTitle').value.trim();
     const artist = document.getElementById('naArtist').value.trim();
     const desc = document.getElementById('naDesc').value.trim();
@@ -2774,30 +3106,37 @@ function toggleNewAudioPost(slug, c){
     const allowDownload = document.getElementById('naAllowDl').checked;
     const warn = document.getElementById('naWarn');
     const btn = document.getElementById('naSubmit');
-    if(!file){ warn.style.color='var(--red)'; warn.textContent='Choisis un fichier audio.'; return; }
+    if(!file && !urlInput){ warn.style.color='var(--red)'; warn.textContent='Choisis un fichier audio ou colle un lien.'; return; }
     if(!title){ warn.style.color='var(--red)'; warn.textContent='Ajoute un titre.'; return; }
-    if(file.size > MAX_UPLOAD_BYTES){ warn.style.color='var(--red)'; warn.textContent='Fichier trop volumineux (max 200 Mo).'; return; }
+    if(file && file.size > MAX_UPLOAD_BYTES){ warn.style.color='var(--red)'; warn.textContent='Fichier trop volumineux (max 200 Mo).'; return; }
     btn.disabled=true; btn.textContent='Envoi...';
     warn.style.color='var(--text-mute)';
     try{
       let coverUrl='';
       const coverFile = document.getElementById('naCover').files[0];
       if(coverFile) coverUrl = await resizeImageBase64(coverFile, 500, 0.8);
-      warn.textContent = 'Préparation de l\'audio...';
-      const audioBase64 = await fileToBase64(file);
-      if(audioBase64.length > MEDIA_MAX_TOTAL) throw new Error('Ce fichier audio est trop volumineux. Essaie un fichier plus léger.');
-      const chunked = audioBase64.length > MEDIA_BASE64_LIMIT;
+      let mediaUrl='', mediaBase64='', mediaChunked=false, rawAudioBase64='';
+      if(urlInput){
+        mediaUrl = urlInput;
+      } else {
+        warn.textContent = 'Préparation de l\'audio...';
+        const audioBase64 = await fileToBase64(file);
+        if(audioBase64.length > MEDIA_MAX_TOTAL) throw new Error('Ce fichier audio est trop volumineux. Essaie un fichier plus léger.');
+        mediaChunked = audioBase64.length > MEDIA_BASE64_LIMIT;
+        mediaBase64 = mediaChunked ? '' : audioBase64;
+        rawAudioBase64 = audioBase64;
+      }
       const ref = await db.collection('posts').add({
         communityId: slug, communitySlug: c.slug,
         authorUid: currentUser.uid, authorPseudo: currentUser.pseudo, authorAvatar: currentUser.avatar||'',
-        text: desc, mediaType:'audio', mediaUrl:'', mediaBase64: chunked? '' : audioBase64, mediaChunked: chunked,
+        text: desc, mediaType:'audio', mediaUrl, mediaBase64, mediaChunked,
         audioTitle: title, audioArtist: artist, lyrics, coverUrl, allowDownload,
         likes:[], dislikes:[],
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-      if(chunked){
+      if(mediaChunked){
         warn.textContent = 'Envoi de l\'audio...';
-        const count = await saveMediaChunks('posts', ref.id, audioBase64);
+        const count = await saveMediaChunks('posts', ref.id, rawAudioBase64);
         await ref.update({mediaChunkCount: count});
       }
       const yGain = 8 + Math.floor(Math.random()*5);
@@ -2805,40 +3144,56 @@ function toggleNewAudioPost(slug, c){
       await incrementUserStat(currentUser.uid, 'postsCount', 1);
       evaluateBadges(currentUser.uid);
       area.innerHTML=''; playSound('publish'); toast('Audio publié ! +'+yGain+' Yappers 🪙');
+      listenCommunityFeed(slug, c);
     }catch(err){
-      warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue');
+      warn.style.color='var(--red)'; warn.textContent='Erreur : '+(friendlyFirestoreError(err));
       btn.disabled=false; btn.textContent="Publier l'audio";
     }
   };
 }
 
-function listenCommunityFeed(slug, c){
+// Chargement ponctuel du fil de communauté (posts + onglet Court) — pas de onSnapshot temps réel,
+// pour limiter la consommation de lectures Firestore sur le plan gratuit. Rafraîchir via 🔄.
+async function listenCommunityFeed(slug, c){
   const feed = document.getElementById('communityFeed');
-  const un = db.collection('posts').where('communityId','==',slug)
-    .onSnapshot(async snap=>{
-      let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
-      posts.sort((a,b)=> (b.createdAt? b.createdAt.toMillis():Date.now()) - (a.createdAt? a.createdAt.toMillis():Date.now()));
-      if(communitySubFilter) posts = posts.filter(p=> p.subSlug===communitySubFilter);
-      await resolveChunkedMedia(posts);
-      if(!document.getElementById('communityFeed')) return; // la page a changé pendant le chargement
+  if(feed) feed.innerHTML = '<div class="empty">Chargement...</div>';
+  try{
+    const snap = await db.collection('posts').where('communityId','==',slug).get();
+    let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
+    posts.sort((a,b)=> (b.createdAt? b.createdAt.toMillis():Date.now()) - (a.createdAt? a.createdAt.toMillis():Date.now()));
+    await resolveChunkedMedia(posts);
+    cachePostsOffline(posts);
+    if(communitySubFilter) posts = posts.filter(p=> p.subSlug===communitySubFilter);
+    if(!document.getElementById('communityFeed')) return; // la page a changé pendant le chargement
+    if(communityTab==='video'){
+      const shorts = posts.filter(p=> (p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image');
+      renderImmersiveFeed(feed, shorts);
+    } else {
+      renderCommunityFeed(feed, posts, c, slug);
+    }
+  }catch(err){
+    console.error(err);
+    let offline = await getOfflinePosts(p=> p.communityId===slug);
+    if(communitySubFilter) offline = offline.filter(p=> p.subSlug===communitySubFilter);
+    if(!document.getElementById('communityFeed')) return;
+    if(offline.length){
       if(communityTab==='video'){
-        const shorts = posts.filter(p=> (p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image');
+        const shorts = offline.filter(p=> (p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image');
         renderImmersiveFeed(feed, shorts);
       } else {
-        renderCommunityFeed(feed, posts, c, slug);
+        renderCommunityFeed(feed, offline, c, slug, true);
       }
-    }, err=>{
-      console.error(err);
-      if(feed) feed.innerHTML = '<div class="empty">Erreur de chargement du fil : '+esc(err.message)+'</div>';
-    });
-  unsubscribers.push(un);
+    } else if(feed){
+      feed.innerHTML = '<div class="empty">Erreur de chargement du fil : '+esc(friendlyFirestoreError(err))+'</div>';
+    }
+  }
 }
 
-async function renderCommunityFeed(feed, posts, c, slug){
+async function renderCommunityFeed(feed, posts, c, slug, offline){
   if(!feed) return;
-  const filterBar = communitySubFilter
+  const filterBar = (offline? offlineBannerHtml() : '') + (communitySubFilter
     ? `<div class="post-meta" style="padding:8px 14px;border-bottom:1px solid var(--border);">🏷️ Filtré sur <b>${esc(communitySubNames[communitySubFilter]||communitySubFilter)}</b> — <a href="javascript:void(0)" id="clearSubFilter">voir tous les posts</a></div>`
-    : '';
+    : '');
   if(posts.length===0){ feed.innerHTML = filterBar+'<div class="empty">Rien à afficher ici pour le moment.</div>'; document.getElementById('clearSubFilter')?.addEventListener('click', ()=>{ communitySubFilter=null; listenCommunityFeed(slug, c); }); return; }
   const counts = await Promise.all(posts.map(p=> db.collection('posts').doc(p.id).collection('comments').get().then(s=>s.size).catch(()=>0)));
   // Render via sandboxed iframe so community custom CSS only affects this feed
@@ -2852,13 +3207,15 @@ async function renderCommunityFeed(feed, posts, c, slug){
         </div>
       </div>
       ${p.text? `<div class="post-text">${esc(p.text)}</div>`:''}
+      ${p.offlineMediaUnavailable? `<div class="post-meta" style="padding:8px;background:#f1f2f6;border-radius:6px;">📴 Média non disponible hors-ligne.</div>` : `
       ${p.mediaType==='video' && p.videoType==='youtube'? youtubeEmbedHtml(p.videoId) : ''}
       ${p.mediaType==='video' && p.videoType!=='youtube'? videoPlayerHtml(p.mediaUrl||p.mediaBase64, p.musicUrl) : ''}
       ${p.mediaType==='image'? `<img class="post-image" src="${p.mediaUrl||p.mediaBase64}">`:''}
       ${p.mediaType==='audio'? audioPlayerHtml(p) : ''}
+      `}
       <div class="post-actions">
-        <button class="post-likes" onclick="parent.postMessage({type:'vote',id:'${p.id}',act:'like'},'*')">👍 ${(p.likes||[]).length}</button>
-        <button class="post-dislikes" onclick="parent.postMessage({type:'vote',id:'${p.id}',act:'dislike'},'*')">👎 ${(p.dislikes||[]).length}</button>
+        <button class="post-likes${(p.likes||[]).includes(currentUser.uid)?' voted':''}" data-id="${p.id}" data-likes="${(p.likes||[]).length}" data-dislikes="${(p.dislikes||[]).length}" data-liked="${(p.likes||[]).includes(currentUser.uid)?'1':'0'}" data-disliked="${(p.dislikes||[]).includes(currentUser.uid)?'1':'0'}">👍 ${(p.likes||[]).length}</button>
+        <button class="post-dislikes${(p.dislikes||[]).includes(currentUser.uid)?' voted':''}" data-id="${p.id}" data-likes="${(p.likes||[]).length}" data-dislikes="${(p.dislikes||[]).length}" data-liked="${(p.likes||[]).includes(currentUser.uid)?'1':'0'}" data-disliked="${(p.dislikes||[]).includes(currentUser.uid)?'1':'0'}">👎 ${(p.dislikes||[]).length}</button>
         <button class="post-comments" onclick="parent.postMessage({type:'comments',id:'${p.id}'},'*')">💬 ${counts[i]}</button>
         ${p.authorUid!==currentUser.uid? `<button class="post-report" data-uid="${esc(p.authorUid)}" data-pseudo="${esc(p.authorPseudo)}" data-target="${esc(p.id)}">🚩</button>`:''}
         ${(p.authorUid===currentUser.uid || isAdmin())? `<button class="post-delete" onclick="parent.postMessage({type:'delete',id:'${p.id}'},'*')">🗑️</button>`:''}
@@ -2875,6 +3232,8 @@ async function renderCommunityFeed(feed, posts, c, slug){
     .post-image{width:100%;max-height:420px;border-radius:4px;background:#000;object-fit:cover;}
     .post-actions{display:flex;gap:8px;margin-top:6px;}
     .post-actions button{font-family:inherit;font-size:11px;font-weight:bold;border:1px solid #c7cdd6;background:#eef1f6;border-radius:3px;padding:3px 8px;cursor:pointer;}
+    .post-likes.voted{background:#e6f7ec;border-color:#8fd6ab;color:#1a7f43;}
+    .post-dislikes.voted{background:#fbe9e9;border-color:#e3a3a3;color:#b83c3c;}
     .post-delete{margin-left:auto;color:#b83c3c;border-color:#e3b8b8;}
     .post-report{margin-left:auto;}
     .v2-player{position:relative;width:100%;background:#000;border-radius:4px;overflow:hidden;max-height:420px;}
@@ -2909,9 +3268,40 @@ async function renderCommunityFeed(feed, posts, c, slug){
     <script>
       const ro = new ResizeObserver(()=> parent.postMessage({type:'resize', h: document.body.scrollHeight}, '*'));
       ro.observe(document.body);
+      window.addEventListener('message', e=>{
+        if(e.data && e.data.type==='removePost'){
+          const el = document.querySelector('.post[data-id="'+e.data.id+'"]');
+          if(el) el.remove();
+        }
+      });
       document.querySelectorAll('.post-report').forEach(btn=>{
         btn.addEventListener('click', ()=>{
           parent.postMessage({type:'report', uid:btn.dataset.uid, pseudo:btn.dataset.pseudo, targetType:'post', targetId:btn.dataset.target}, '*');
+        });
+      });
+      document.querySelectorAll('.post-likes, .post-dislikes').forEach(btn=>{
+        btn.addEventListener('click', ()=>{
+          const post = btn.closest('.post');
+          const likeBtn = post.querySelector('.post-likes');
+          const dislikeBtn = post.querySelector('.post-dislikes');
+          let likes = parseInt(likeBtn.dataset.likes,10)||0;
+          let dislikes = parseInt(dislikeBtn.dataset.dislikes,10)||0;
+          let liked = likeBtn.dataset.liked==='1';
+          let disliked = dislikeBtn.dataset.disliked==='1';
+          const act = btn===likeBtn ? 'like' : 'dislike';
+          if(act==='like'){
+            if(liked){ liked=false; likes--; } else { liked=true; likes++; if(disliked){ disliked=false; dislikes--; } }
+          } else {
+            if(disliked){ disliked=false; dislikes--; } else { disliked=true; dislikes++; if(liked){ liked=false; likes--; } }
+          }
+          [likeBtn, dislikeBtn].forEach(b=>{
+            b.dataset.likes=likes; b.dataset.dislikes=dislikes; b.dataset.liked=liked?'1':'0'; b.dataset.disliked=disliked?'1':'0';
+          });
+          likeBtn.textContent = '👍 '+likes;
+          dislikeBtn.textContent = '👎 '+dislikes;
+          likeBtn.classList.toggle('voted', liked);
+          dislikeBtn.classList.toggle('voted', disliked);
+          parent.postMessage({type:'vote', id:btn.dataset.id, act}, '*');
         });
       });
       function fmtTime(s){ if(!isFinite(s)||s<0) return '0:00'; const m=Math.floor(s/60), sec=Math.floor(s%60); return m+':'+(sec<10?'0':'')+sec; }
@@ -3081,6 +3471,150 @@ async function renderCommunitySubs(container, slug, c, cAdmin, isMember){
 }
 
 /* ================================================================
+   ÉVÉNEMENTS DE COMMUNAUTÉ
+   ================================================================ */
+function eventOverlaysHtml(ev){
+  return (ev.overlayGifs||[]).map(o=> `<img class="event-overlay-gif pos-${esc(o.position||'top-right')}" src="${esc(o.url)}">`).join('');
+}
+function eventBannerStyle(ev){
+  return ev.bgImageUrl ? `background-image:url('${ev.bgImageUrl}');` : `background-color:${ev.bgColor||'#4F46E5'};`;
+}
+
+async function renderCommunityEvents(container, slug, c, cAdmin){
+  if(!container) return;
+  const canAdd = canAddCommunityMedia(c);
+  container.innerHTML = `
+    <div class="panel-body" style="border-top:1px solid var(--border);">
+      ${canAdd? '<button class="small" id="addEventBtn">+ Créer un événement</button>' : ''}
+      <div id="addEventArea"></div>
+      <div id="eventsListArea" style="margin-top:12px;"><div class="empty">Chargement...</div></div>
+    </div>`;
+  document.getElementById('addEventBtn')?.addEventListener('click', ()=>
+    renderAddEventForm(document.getElementById('addEventArea'), slug, ()=> renderCommunityEvents(container, slug, c, cAdmin)));
+  try{
+    const snap = await db.collection('communities').doc(slug).collection('events').orderBy('createdAt','desc').get();
+    const events = []; snap.forEach(d=> events.push({id:d.id, ...d.data()}));
+    const list = document.getElementById('eventsListArea');
+    if(!list) return;
+    if(!events.length){ list.innerHTML = '<div class="empty">Aucun événement pour le moment.</div>'; return; }
+    list.innerHTML = '';
+    events.forEach(ev=>{
+      const card = document.createElement('div');
+      card.className = 'event-card';
+      card.innerHTML = `
+        <div class="event-banner" style="${eventBannerStyle(ev)}">
+          ${eventOverlaysHtml(ev)}
+          <div class="title">${esc(ev.title)}</div>
+        </div>
+        <div class="event-body">
+          ${ev.eventDate? `<div class="post-meta">🗓️ ${esc(ev.eventDate)}</div>` : ''}
+          ${ev.description? `<div class="post-meta" style="margin-top:4px;">${esc(ev.description.slice(0,90))}${ev.description.length>90?'...':''}</div>`:''}
+        </div>`;
+      card.onclick = ()=> renderEventDetail(container, slug, c, cAdmin, ev);
+      list.appendChild(card);
+    });
+  }catch(err){
+    const list = document.getElementById('eventsListArea');
+    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
+  }
+}
+
+function renderAddEventForm(area, slug, onDone){
+  area.innerHTML = `
+    <div class="panel" style="margin-top:8px;">
+      <div class="panel-head">Créer un événement</div>
+      <div class="panel-body">
+        <div class="field"><label>Titre</label><input id="evTitle" maxlength="60" placeholder="ex: Soirée de lancement"></div>
+        <div class="field"><label>Date / horaire (texte libre, optionnel)</label><input id="evDate" placeholder="ex: Samedi 12 avril, 20h"></div>
+        <div class="field"><label>Description (optionnel)</label><textarea id="evDesc" placeholder="Détails de l'événement..."></textarea></div>
+        <div class="field"><label>Fond — couleur</label><input type="color" id="evBgColor" value="#4F46E5"></div>
+        <div class="field"><label>...ou fond par image (prend le dessus sur la couleur)</label><input type="file" id="evBgImage" accept="image/*"></div>
+        <div class="field">
+          <label>🎞️ Overlays GIF (jusqu'à 3, optionnel)</label>
+          <div id="evOverlayRows"></div>
+          <button type="button" class="secondary small" id="evAddOverlayBtn" style="margin-top:4px;">+ Ajouter un overlay</button>
+        </div>
+        <button id="evSaveBtn" class="small">Créer l'événement</button>
+        <div id="evMsg" style="color:var(--red);margin-top:6px;"></div>
+      </div>
+    </div>`;
+  const overlayRows = document.getElementById('evOverlayRows');
+  function addOverlayRow(){
+    if(overlayRows.children.length>=3) return;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;margin-top:6px;align-items:center;';
+    row.innerHTML = `
+      <input class="ev-overlay-url" placeholder="https://.../overlay.gif" style="flex:1;">
+      <select class="ev-overlay-pos">
+        <option value="top-left">↖ Haut gauche</option>
+        <option value="top-right" selected>↗ Haut droite</option>
+        <option value="bottom-left">↙ Bas gauche</option>
+        <option value="bottom-right">↘ Bas droite</option>
+        <option value="center">◎ Centre</option>
+      </select>
+      <button type="button" class="danger small ev-overlay-remove">✕</button>`;
+    row.querySelector('.ev-overlay-remove').onclick = ()=> row.remove();
+    overlayRows.appendChild(row);
+  }
+  document.getElementById('evAddOverlayBtn').onclick = addOverlayRow;
+  addOverlayRow();
+  document.getElementById('evSaveBtn').onclick = async ()=>{
+    const title = document.getElementById('evTitle').value.trim();
+    const msg = document.getElementById('evMsg');
+    if(title.length<2){ msg.textContent='Ajoute un titre.'; return; }
+    const btn = document.getElementById('evSaveBtn');
+    btn.disabled = true; btn.textContent = 'Création...';
+    msg.style.color = 'var(--text-mute)'; msg.textContent = '';
+    try{
+      let bgImageUrl = '';
+      const imgFile = document.getElementById('evBgImage').files[0];
+      if(imgFile) bgImageUrl = await resizeImageBase64(imgFile, 900, 0.75);
+      const overlayGifs = [];
+      Array.from(overlayRows.children).forEach(row=>{
+        const url = row.querySelector('.ev-overlay-url').value.trim();
+        const position = row.querySelector('.ev-overlay-pos').value;
+        if(url) overlayGifs.push({url, position});
+      });
+      await db.collection('communities').doc(slug).collection('events').add({
+        title,
+        eventDate: document.getElementById('evDate').value.trim(),
+        description: document.getElementById('evDesc').value.trim(),
+        bgColor: document.getElementById('evBgColor').value,
+        bgImageUrl, overlayGifs,
+        createdBy: currentUser.uid,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      toast('Événement créé !');
+      area.innerHTML = '';
+      onDone();
+    }catch(err){
+      msg.style.color = 'var(--red)'; msg.textContent = friendlyFirestoreError(err);
+      btn.disabled = false; btn.textContent = "Créer l'événement";
+    }
+  };
+}
+
+function renderEventDetail(container, slug, c, cAdmin, ev){
+  container.innerHTML = `
+    <div class="panel-body">
+      <button class="secondary small" id="evBack">← Retour</button>
+      <div class="event-banner detail" style="margin-top:10px;border-radius:12px;${eventBannerStyle(ev)}">
+        ${eventOverlaysHtml(ev)}
+        <div class="title">${esc(ev.title)}</div>
+      </div>
+      ${ev.eventDate? `<div class="post-meta" style="margin-top:8px;">🗓️ ${esc(ev.eventDate)}</div>`:''}
+      ${ev.description? `<div class="post-text" style="margin-top:6px;">${esc(ev.description)}</div>`:''}
+      ${cAdmin? `<button class="danger small" id="evDelete" style="margin-top:10px;">🗑️ Supprimer l'événement</button>`:''}
+    </div>`;
+  document.getElementById('evBack').onclick = ()=> renderCommunityEvents(container, slug, c, cAdmin);
+  document.getElementById('evDelete')?.addEventListener('click', async ()=>{
+    if(!confirm('Supprimer cet événement ?')) return;
+    await db.collection('communities').doc(slug).collection('events').doc(ev.id).delete();
+    renderCommunityEvents(container, slug, c, cAdmin);
+  });
+}
+
+/* ================================================================
    FILMS & SÉRIES DE COMMUNAUTÉ
    ================================================================ */
 async function renderCommunityMedia(container, slug, c, cAdmin){
@@ -3118,7 +3652,7 @@ async function renderCommunityMedia(container, slug, c, cAdmin){
     });
   }catch(err){
     const grid = document.getElementById('mediaGrid');
-    if(grid) grid.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+    if(grid) grid.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
   }
 }
 
@@ -3184,7 +3718,7 @@ function renderAddMovieForm(area, slug, onDone){
       toast('Film publié !');
       area.innerHTML='';
       onDone();
-    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue'); btn.disabled=false; btn.textContent='Publier le film'; }
+    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(friendlyFirestoreError(err)); btn.disabled=false; btn.textContent='Publier le film'; }
   };
 }
 
@@ -3217,7 +3751,7 @@ function renderAddSeriesForm(area, slug, onCreated){
       area.innerHTML='';
       const doc = await ref.get();
       onCreated({id:ref.id, ...doc.data()});
-    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue'); btn.disabled=false; btn.textContent='Créer la série'; }
+    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(friendlyFirestoreError(err)); btn.disabled=false; btn.textContent='Créer la série'; }
   };
 }
 
@@ -3368,7 +3902,7 @@ function renderAddEpisodeForm(container, slug, c, cAdmin, m, sIdx){
       toast('Épisode ajouté !');
       const doc = await db.collection('communities').doc(slug).collection('media').doc(m.id).get();
       renderSeriesDetail(container, slug, c, cAdmin, {id:m.id, ...doc.data()});
-    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue'); btn.disabled=false; btn.textContent="Ajouter l'épisode"; }
+    }catch(err){ warn.style.color='var(--red)'; warn.textContent='Erreur : '+(friendlyFirestoreError(err)); btn.disabled=false; btn.textContent="Ajouter l'épisode"; }
   };
 }
 
@@ -4715,6 +5249,23 @@ function playCustomGame(area, slug, g){
   loop();
 }
 /* ---------------- IMMERSIVE SHORT-FORM FEED ---------------- */
+// Même principe que optimisticVoteUpdate, mais pour les boutons 👍/👎 du fil immersif (Scroll / Court).
+function optimisticImmersiveVoteUpdate(item, p, act){
+  const uid = currentUser.uid;
+  p.likes = p.likes||[]; p.dislikes = p.dislikes||[];
+  if(act==='like'){
+    if(p.likes.includes(uid)) p.likes = p.likes.filter(u=>u!==uid);
+    else { p.likes = [...p.likes, uid]; p.dislikes = p.dislikes.filter(u=>u!==uid); }
+  } else {
+    if(p.dislikes.includes(uid)) p.dislikes = p.dislikes.filter(u=>u!==uid);
+    else { p.dislikes = [...p.dislikes, uid]; p.likes = p.likes.filter(u=>u!==uid); }
+  }
+  const likeBtn = item.querySelector('[data-act="like"]');
+  const dislikeBtn = item.querySelector('[data-act="dislike"]');
+  if(likeBtn){ likeBtn.innerHTML = '👍<br>'+p.likes.length; likeBtn.classList.toggle('active-like', p.likes.includes(uid)); }
+  if(dislikeBtn){ dislikeBtn.innerHTML = '👎<br>'+p.dislikes.length; dislikeBtn.classList.toggle('active-dislike', p.dislikes.includes(uid)); }
+}
+
 function renderImmersiveFeed(container, posts, onLoadMore){
   if(!container) return;
   if(posts.length===0){ container.innerHTML = '<div class="empty">Aucun contenu court pour le moment. Poste une photo, un GIF ou une vidéo !</div>'; return; }
@@ -4725,6 +5276,7 @@ function renderImmersiveFeed(container, posts, onLoadMore){
     const disliked = (p.dislikes||[]).includes(currentUser.uid);
     const item = document.createElement('div');
     item.className = 'immersive-item';
+    item.dataset.id = p.id;
     item.innerHTML = `
       ${p.mediaType==='video'
         ? `<video class="immersive-media" loop playsinline muted src="${p.mediaUrl||p.mediaBase64}"></video>`
@@ -4744,7 +5296,7 @@ function renderImmersiveFeed(container, posts, onLoadMore){
     `;
     item.querySelectorAll('.imv-btn').forEach(btn=>{
       btn.onclick = ()=>{
-        if(btn.dataset.act==='like'||btn.dataset.act==='dislike') vote(p.id, btn.dataset.act);
+        if(btn.dataset.act==='like'||btn.dataset.act==='dislike'){ optimisticImmersiveVoteUpdate(item, p, btn.dataset.act); vote(p.id, btn.dataset.act); }
         else if(btn.dataset.act==='comments') openComments(p.id);
         else if(btn.dataset.act==='mute') toggleImmersiveSound(item, btn);
         else if(btn.dataset.act==='delete') deletePost(p.id);
@@ -4893,7 +5445,7 @@ function renderAdmin(main){
     });
   }).catch(err=>{
     const body = document.getElementById('adminBody');
-    if(body) body.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+    if(body) body.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
   });
 }
 
@@ -4954,7 +5506,7 @@ function renderBots(main){
       });
       toast('Bot créé !');
       renderBots(main);
-    }catch(err){ msg.style.color='var(--red)'; msg.textContent='Erreur : '+(err.message||'erreur inconnue'); btn.disabled=false; btn.textContent='Créer le bot'; }
+    }catch(err){ msg.style.color='var(--red)'; msg.textContent='Erreur : '+(friendlyFirestoreError(err)); btn.disabled=false; btn.textContent='Créer le bot'; }
   };
 
   db.collection('users').where('isBot','==',true).get().then(snap=>{
@@ -4984,7 +5536,7 @@ function renderBots(main){
     });
   }).catch(err=>{
     const list = document.getElementById('botsList');
-    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message||'erreur inconnue')+'</div>';
+    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
   });
 }
 
@@ -5114,7 +5666,7 @@ function renderBotPostForm(area, bot){
       toast('Publié en tant que '+bot.pseudo+' !');
       area.innerHTML='';
     }catch(err){
-      warn.style.color='var(--red)'; warn.textContent='Erreur : '+(err.message||'erreur inconnue');
+      warn.style.color='var(--red)'; warn.textContent='Erreur : '+(friendlyFirestoreError(err));
       btn.disabled=false; btn.textContent = scheduledFor? 'Programmer' : 'Publier';
     }
   };
@@ -5145,7 +5697,7 @@ function renderScheduledBotPosts(bot){
       list.appendChild(row);
     });
   }).catch(err=>{
-    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message||'erreur inconnue')+'</div>';
+    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
   });
 }
 
@@ -5332,7 +5884,7 @@ function renderProfile(main, uid){
       posts.slice(0,30).forEach(p=> box.appendChild(renderPostCard(p.id, p)));
     }).catch(err=>{
       const box = document.getElementById('userPosts');
-      if(box) box.innerHTML = '<div class="empty">Erreur de chargement : '+esc(err.message)+'</div>';
+      if(box) box.innerHTML = '<div class="empty">Erreur de chargement : '+esc(friendlyFirestoreError(err))+'</div>';
     });
   });
 }
@@ -5496,7 +6048,7 @@ function renderLiveHub(main){
     });
   }, err=>{
     const list = document.getElementById('liveList');
-    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(err.message)+'</div>';
+    if(list) list.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
   });
 unsubscribers.push(liveUn);
 }
@@ -6001,7 +6553,7 @@ function renderLiveRoom(main, codeRaw){
     // Spectateur·rice ou invité·e : le mode est piloté par le listener du doc live (liveDocUn) plus haut,
     // qui appelle enterViewerMode() ou enterGuestMode() selon le champ guestUid.
   }).catch(err=>{
-    main.innerHTML = '<div class="panel"><div class="empty">Erreur : '+esc(err.message)+'</div></div>';
+    main.innerHTML = '<div class="panel"><div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div></div>';
   });
 }
 </script>
