@@ -4,6 +4,25 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>2Yap</title>
+<meta name="description" content="Rejoins 2Yap, un réseau social pour... Blablater !">
+
+<!-- Favicon -->
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="512x512" href="favicon.png">
+<link rel="apple-touch-icon" href="favicon.png">
+
+<!-- Open Graph (partage sur réseaux sociaux, Discord, WhatsApp...) -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="2Yap">
+<meta property="og:description" content="Rejoins 2Yap, un réseau social pour... Blablater !">
+<meta property="og:image" content="https://zomanisaurio.github.io/2yap/og-image.jpg">
+<meta property="og:url" content="https://zomanisaurio.github.io/2yap">
+
+<!-- Twitter/X Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="2Yap">
+<meta name="twitter:description" content="Rejoins 2Yap, un réseau social pour... Blablater !">
+<meta name="twitter:image" content="https://zomanisaurio.github.io/2yap/og-image.jpg">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.0/firebase-app.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.0/firebase-auth.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/8.10.0/firebase-firestore.js"></script>
@@ -43,9 +62,29 @@
   body, .panel, button, input, textarea, select{ transition:background-color .2s ease, color .2s ease, border-color .2s ease; }
   @keyframes fadeInUp{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);} }
   @keyframes popIn{ 0%{transform:scale(1);} 40%{transform:scale(1.25);} 100%{transform:scale(1);} }
-  .panel, .post, .comm-card, .comment-item{ animation:fadeInUp .25s ease; }
+  @keyframes wiiPanelIn{
+    0%{opacity:0; transform:translateY(10px) scale(.97);}
+    65%{opacity:1; transform:translateY(-2px) scale(1.012);}
+    100%{opacity:1; transform:translateY(0) scale(1);}
+  }
+  @keyframes wiiWobbleHover{
+    0%,100%{transform:rotate(0deg) scale(1.035);}
+    25%{transform:rotate(-2deg) scale(1.05);}
+    75%{transform:rotate(2deg) scale(1.05);}
+  }
+  @keyframes wiiBreathe{ 0%,100%{transform:scale(1);} 50%{transform:scale(1.04);} }
+  .panel, .post, .comm-card, .comment-item{ animation:wiiPanelIn .45s cubic-bezier(.34,1.56,.64,1) both; }
   .vote-btn.active-like, .vote-btn.active-dislike, .imv-btn.active-like, .imv-btn.active-dislike{ animation:popIn .28s ease; }
-  .toast{ animation:fadeInUp .2s ease; }
+  .toast{ animation:wiiPanelIn .3s cubic-bezier(.34,1.56,.64,1) both; }
+  /* Intensité des animations "wobbly", réglable dans 🎨 Apparence (défaut = "subtle" déjà appliqué ci-dessus) */
+  html[data-wobble="off"] .panel, html[data-wobble="off"] .post, html[data-wobble="off"] .comm-card,
+  html[data-wobble="off"] .comment-item, html[data-wobble="off"] .toast{ animation:none !important; }
+  html[data-wobble="off"] button:hover, html[data-wobble="off"] .btn:hover,
+  html[data-wobble="off"] .comm-card:hover, html[data-wobble="off"] .avatar:hover{ transform:none !important; animation:none !important; }
+  html[data-wobble="off"] button:active, html[data-wobble="off"] .btn:active{ transform:none !important; }
+  html[data-wobble="full"] button:hover, html[data-wobble="full"] .btn:hover{ animation:wiiWobbleHover .45s ease; }
+  html[data-wobble="full"] #logo .star, html[data-wobble="full"] .drawer-logo .star{ display:inline-block; animation:wiiBreathe 2s ease-in-out infinite; }
+  html[data-wobble="full"] .panel{ animation-duration:.6s; }
   *{box-sizing:border-box;}
   html{-webkit-tap-highlight-color:transparent;}
   body{
@@ -65,21 +104,22 @@
     font-weight:600;
     color:#fff;
     border:none;
-    border-radius:10px;
+    border-radius:16px;
     padding:10px 16px;
     cursor:pointer;
     background:var(--primary);
-    transition:background .15s ease, transform .05s ease;
+    box-shadow:0 3px 0 rgba(0,0,0,0.08), 0 5px 14px -5px var(--primary);
+    transition:background .15s ease, transform .18s cubic-bezier(.34,1.56,.64,1), box-shadow .15s ease;
   }
-  button:hover{background:var(--primary-dark);}
-  button:active{transform:scale(0.98);}
+  button:hover{background:var(--primary-dark); transform:translateY(-2px) scale(1.035);}
+  button:active{transform:scale(0.92) rotate(-1deg); box-shadow:0 1px 0 rgba(0,0,0,0.08);}
   button.secondary{
-    background:#EEF0F4; color:var(--text);
+    background:#EEF0F4; color:var(--text); box-shadow:0 3px 0 rgba(0,0,0,0.05);
   }
   button.secondary:hover{background:#E3E6EC;}
-  button.danger{ background:var(--red); }
+  button.danger{ background:var(--red); box-shadow:0 3px 0 rgba(0,0,0,0.08), 0 5px 14px -5px var(--red); }
   button.danger:hover{ background:#B91C1C; }
-  button.small{padding:6px 12px;font-size:13px; border-radius:8px;}
+  button.small{padding:6px 12px;font-size:13px; border-radius:12px;}
   input, textarea, select{
     font-family:inherit;font-size:15px;
     border:1.5px solid var(--border); border-radius:10px;
@@ -179,8 +219,8 @@
   body.has-ad-banner #immersiveFeed{margin-bottom:52px;}
   #main-col{min-width:0;}
   .panel{
-    background:var(--panel); border:1px solid var(--border); border-radius:14px;
-    box-shadow:0 1px 2px rgba(20,22,35,0.03);
+    background:var(--panel); border:1px solid var(--border); border-radius:20px;
+    box-shadow:0 2px 0 rgba(0,0,0,0.02), 0 8px 20px -10px rgba(20,22,35,0.14);
     margin-bottom:14px; overflow:hidden;
   }
   .panel-head{
@@ -366,10 +406,10 @@
   /* GRID for explore */
   .grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(140px,1fr)); gap:10px; padding:14px;}
   .comm-card{
-    border:1px solid var(--border); border-radius:12px; overflow:hidden; background:#fff; cursor:pointer;
-    transition:box-shadow .15s ease;
+    border:1px solid var(--border); border-radius:16px; overflow:hidden; background:#fff; cursor:pointer;
+    transition:box-shadow .18s ease, transform .18s cubic-bezier(.34,1.56,.64,1);
   }
-  .comm-card:hover{box-shadow:0 4px 14px rgba(20,22,35,0.1);}
+  .comm-card:hover{box-shadow:0 10px 20px -8px rgba(20,22,35,0.18); transform:translateY(-3px) scale(1.02) rotate(-0.5deg);}
   .comm-card .thumb{height:72px; background-size:cover; background-position:center; background-color:var(--primary-light);}
   .comm-card .cc-body{padding:8px 10px;}
   .comm-card .cc-name{font-weight:700; font-size:13px; color:var(--text);}
@@ -431,6 +471,38 @@
   .live-join-row{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border);}
   .live-join-row:last-child{border-bottom:none;}
   .live-join-row > div{flex:1;}
+
+  /* SHOWS (P2P) */
+  .show-row{display:flex; align-items:center; gap:10px; padding:11px 14px; border-bottom:1px solid var(--border); cursor:pointer;}
+  .show-row:last-child{border-bottom:none;}
+  .show-row:hover{background:var(--bg);}
+  .stage-area{background:#14151f; border-radius:14px; padding:16px; min-height:140px; display:flex; flex-wrap:wrap; gap:16px; justify-content:center; align-items:flex-start;}
+  .audience-area{display:flex; flex-wrap:wrap; gap:10px; padding:12px; justify-content:center;}
+  .show-person{position:relative; display:flex; flex-direction:column; align-items:center; gap:5px; width:64px;}
+  .show-person .avatar{width:56px; height:56px; border-radius:50%; border:3px solid transparent; transition:transform .15s ease, border-color .15s ease; object-fit:cover;}
+  .show-person.speaking .avatar{border-color:#22C55E; box-shadow:0 0 0 4px rgba(34,197,94,0.25);}
+  @keyframes personBounce{0%,100%{transform:translateY(0);} 50%{transform:translateY(-6px);}}
+  .show-person.speaking .avatar{animation:personBounce .5s ease-in-out infinite;}
+  .show-person .sp-name{font-size:10.5px; color:#fff; max-width:64px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center;}
+  .audience-area .show-person .sp-name{color:var(--text); }
+  .show-person .mic-badge{position:absolute; top:-2px; right:2px; background:rgba(0,0,0,0.6); border-radius:50%; width:18px; height:18px; display:flex; align-items:center; justify-content:center; font-size:9px;}
+  .show-bubble{
+    position:absolute; bottom:66px; left:50%; transform:translateX(-50%);
+    background:#fff; color:#222; padding:5px 9px; border-radius:12px; font-size:11px; font-weight:600;
+    max-width:130px; white-space:normal; word-break:break-word; text-align:center;
+    box-shadow:0 2px 8px rgba(0,0,0,0.25); animation:fadeInUp .15s ease; z-index:5;
+  }
+  .show-bubble::after{content:''; position:absolute; bottom:-5px; left:50%; transform:translateX(-50%); border:5px solid transparent; border-top-color:#fff;}
+  #showChatBox{height:180px; overflow-y:auto; padding:10px; background:#FAFBFD; border:1px solid var(--border); border-radius:12px; margin-top:10px;}
+  #showMediaPanel{background:#000; border-radius:12px; overflow:hidden; margin-top:10px;}
+  #showMediaPanel img, #showMediaPanel video{width:100%; max-height:280px; object-fit:contain; display:block; background:#000;}
+  .battle-bar-wrap{display:flex; align-items:center; gap:8px; margin-top:8px;}
+  .battle-bar{flex:1; height:22px; border-radius:11px; overflow:hidden; display:flex; background:#eee; border:1px solid var(--border);}
+  .battle-bar-a{background:#4F46E5; height:100%;}
+  .battle-bar-b{background:#EC4899; height:100%;}
+  .show-req-row{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border);}
+  .show-req-row:last-child{border-bottom:none;}
+  .show-req-row > div{flex:1;}
 
   .empty{padding:22px; text-align:center; color:var(--text-mute); font-size:14px;}
   .toast{
@@ -537,6 +609,7 @@
     <a class="navlink" data-nav href="#home"><span class="ic">🏠</span> Accueil</a>
     <a class="navlink" data-nav href="#scroll"><span class="ic">🎬</span> Scroll</a>
     <a class="navlink" data-nav href="#live"><span class="ic">🔴</span> Live</a>
+    <a class="navlink" data-nav href="#shows"><span class="ic">🎭</span> Shows</a>
     <a class="navlink" data-nav href="#explore"><span class="ic">🔎</span> Communautés</a>
     <a class="navlink" data-nav href="#people"><span class="ic">👥</span> Personnes</a>
     <a class="navlink" data-nav href="#create-community"><span class="ic">➕</span> Créer y/communauté</a>
@@ -545,6 +618,7 @@
     <a class="navlink" data-nav href="#leaderboard"><span class="ic">🏆</span> Classement Yappers</a>
     <a class="navlink" data-nav href="#messages"><span class="ic">✉️</span> Messages</a>
     <a class="navlink" id="myProfileLink" data-nav href="#profile"><span class="ic">👤</span> Mon profil</a>
+    <a class="navlink" data-nav href="#appearance"><span class="ic">🎨</span> Apparence</a>
     <a class="navlink" data-nav href="#support"><span class="ic">🆘</span> Support</a>
     <a class="navlink" data-nav href="#catbox"><span class="ic">📦</span> Stockage Catbox</a>
     <a class="navlink hidden" id="adminLink" data-nav href="#admin"><span class="ic">🛡️</span> Admin</a>
@@ -1263,6 +1337,40 @@ function toggleTheme(){
 }
 initTheme();
 
+/* ---------------- APPARENCE PERSONNALISÉE (couleurs + intensité des animations) ---------------- */
+const UI_WOBBLE_DEFAULT = 'subtle';
+function applyUiTheme(theme){
+  theme = theme || {};
+  const root = document.documentElement;
+  if(theme.primary) root.style.setProperty('--primary', theme.primary);
+  else root.style.removeProperty('--primary');
+  if(theme.primaryDark) root.style.setProperty('--primary-dark', theme.primaryDark);
+  else root.style.removeProperty('--primary-dark');
+  if(theme.bg) root.style.setProperty('--bg', theme.bg);
+  else root.style.removeProperty('--bg');
+  root.setAttribute('data-wobble', theme.wobble || UI_WOBBLE_DEFAULT);
+}
+function darkenHex(hex, amount){
+  try{
+    const n = parseInt(hex.replace('#',''),16);
+    let r = Math.max(0,(n>>16)-amount), g = Math.max(0,((n>>8)&255)-amount), b = Math.max(0,(n&255)-amount);
+    return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+  }catch(e){ return hex; }
+}
+function loadUiThemeFromCache(){
+  const ls = safeLS();
+  if(!ls) return;
+  try{
+    const raw = ls.getItem('2yap_ui_theme');
+    if(raw) applyUiTheme(JSON.parse(raw));
+  }catch(e){}
+}
+function cacheUiTheme(theme){
+  const ls = safeLS();
+  if(ls) try{ ls.setItem('2yap_ui_theme', JSON.stringify(theme||{})); }catch(e){}
+}
+loadUiThemeFromCache(); // appliqué tout de suite, avant même la connexion, pour éviter un flash du thème par défaut
+
 /* ---------------- SOUNDS ---------------- */
 let soundsOn = true;
 (function initSoundPref(){
@@ -1688,6 +1796,7 @@ auth.onAuthStateChanged(async user=>{
       document.body.classList.add('has-ad-banner');
     }
     updateTopbarAvatar();
+    if(currentUser.uiTheme){ applyUiTheme(currentUser.uiTheme); cacheUiTheme(currentUser.uiTheme); }
     document.getElementById('adminLink').classList.toggle('hidden', !isAdmin());
     document.getElementById('botsLink').classList.toggle('hidden', !isAdmin());
     listenMyCommunities();
@@ -1728,6 +1837,7 @@ function router(){
   if(route==='home' || route===''){ renderHome(main); }
   else if(route==='scroll'){ renderScroll(main); }
   else if(route==='live'){ if(arg) renderLiveRoom(main, arg); else renderLiveHub(main); }
+  else if(route==='shows'){ if(arg) renderShowRoom(main, arg); else renderShowsHub(main); }
   else if(route==='explore'){ renderExplore(main, arg?decodeURIComponent(arg):''); }
   else if(route==='community'){ renderCommunity(main, arg); }
   else if(route==='create-community'){ renderCreateCommunity(main); }
@@ -1742,6 +1852,7 @@ function router(){
   else if(route==='gif-packs'){ renderGifPacks(main); }
   else if(route==='leaderboard'){ renderLeaderboard(main); }
   else if(route==='support'){ renderSupport(main); }
+  else if(route==='appearance'){ renderAppearance(main); }
   else if(route==='catbox'){ renderCatbox(main); }
   else if(route==='inventory'){ renderInventory(main); }
   else { renderHome(main); }
@@ -2264,6 +2375,118 @@ function renderSupport(main){
       toast('Erreur : '+(friendlyFirestoreError(err)));
     }
     btn.disabled = false;
+  };
+}
+
+/* ---------------- APPARENCE ---------------- */
+const UI_THEME_PRESETS = [
+  {name:'2Yap classique', primary:'#4F46E5', bg:'#F3F4F8'},
+  {name:'Wii Bleu',        primary:'#3B82F6', bg:'#E9F2FF'},
+  {name:'Wii Lavande',     primary:'#8B5CF6', bg:'#F3EEFF'},
+  {name:'Wii Corail',      primary:'#FB7185', bg:'#FFF1F2'},
+  {name:'Wii Menthe',      primary:'#10B981', bg:'#ECFDF5'},
+];
+function renderAppearance(main){
+  const current = currentUser.uiTheme || {};
+  const primary = current.primary || '#4F46E5';
+  const bg = current.bg || '#F3F4F8';
+  const wobble = current.wobble || UI_WOBBLE_DEFAULT;
+  main.innerHTML = `
+    <div class="panel">
+      <div class="panel-head">🎨 Apparence</div>
+      <div class="panel-body">
+        <div class="post-text">Personnalise les couleurs et l'ambiance de ton 2Yap — ça ne change que ce que TOI tu vois, et ça te suit partout où tu te connectes.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">Préréglages rapides</div>
+      <div class="panel-body" style="display:flex; flex-wrap:wrap; gap:10px;" id="themePresets"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">Couleurs personnalisées</div>
+      <div class="panel-body">
+        <div class="field"><label>Couleur d'accent (boutons, liens...)</label><input type="color" id="apPrimary" value="${primary}"></div>
+        <div class="field"><label>Fond de l'app</label><input type="color" id="apBg" value="${bg}"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">Animations</div>
+      <div class="panel-body">
+        <div class="field">
+          <label>Intensité des animations "rebondies"</label>
+          <select id="apWobble">
+            <option value="off" ${wobble==='off'?'selected':''}>😐 Désactivées — sobre</option>
+            <option value="subtle" ${wobble==='subtle'?'selected':''}>🙂 Légères (défaut)</option>
+            <option value="full" ${wobble==='full'?'selected':''}>🤪 Maximum — tout rebondit</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-body" style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="apSaveBtn">Enregistrer</button>
+        <button class="secondary" id="apPreviewBtn">👁️ Aperçu</button>
+        <button class="secondary" id="apResetBtn">Réinitialiser</button>
+      </div>
+      <div class="panel-body" id="apMsg" style="padding-top:0;"></div>
+    </div>`;
+
+  const presetsBox = document.getElementById('themePresets');
+  UI_THEME_PRESETS.forEach(preset=>{
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'secondary';
+    swatch.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;';
+    swatch.innerHTML = `<span style="width:18px;height:18px;border-radius:50%;background:${preset.primary};display:inline-block;border:2px solid #fff;box-shadow:0 0 0 1px var(--border);"></span>${esc(preset.name)}`;
+    swatch.onclick = ()=>{
+      document.getElementById('apPrimary').value = preset.primary;
+      document.getElementById('apBg').value = preset.bg;
+      previewAppearance();
+    };
+    presetsBox.appendChild(swatch);
+  });
+
+  function currentFormTheme(){
+    return {
+      primary: document.getElementById('apPrimary').value,
+      primaryDark: darkenHex(document.getElementById('apPrimary').value, 25),
+      bg: document.getElementById('apBg').value,
+      wobble: document.getElementById('apWobble').value
+    };
+  }
+  function previewAppearance(){ applyUiTheme(currentFormTheme()); }
+  document.getElementById('apPreviewBtn').onclick = previewAppearance;
+  document.getElementById('apPrimary').addEventListener('input', previewAppearance);
+  document.getElementById('apBg').addEventListener('input', previewAppearance);
+  document.getElementById('apWobble').addEventListener('change', previewAppearance);
+
+  document.getElementById('apSaveBtn').onclick = async ()=>{
+    const theme = currentFormTheme();
+    const msg = document.getElementById('apMsg');
+    try{
+      await db.collection('users').doc(currentUser.uid).update({uiTheme: theme});
+      currentUser.uiTheme = theme;
+      applyUiTheme(theme);
+      cacheUiTheme(theme);
+      msg.style.color = 'var(--green)';
+      msg.textContent = 'Apparence enregistrée !';
+      toast('Apparence enregistrée !');
+    }catch(err){
+      msg.style.color = 'var(--red)';
+      msg.textContent = friendlyFirestoreError(err);
+    }
+  };
+  document.getElementById('apResetBtn').onclick = async ()=>{
+    applyUiTheme(null);
+    document.getElementById('apPrimary').value = '#4F46E5';
+    document.getElementById('apBg').value = '#F3F4F8';
+    document.getElementById('apWobble').value = UI_WOBBLE_DEFAULT;
+    try{
+      await db.collection('users').doc(currentUser.uid).update({uiTheme: firebase.firestore.FieldValue.delete()});
+      delete currentUser.uiTheme;
+      cacheUiTheme(null);
+      toast('Apparence réinitialisée.');
+    }catch(err){ toast('Erreur : '+friendlyFirestoreError(err)); }
   };
 }
 
@@ -5966,6 +6189,615 @@ const RTC_CONFIG = { iceServers: [
   {urls:'stun:stun.l.google.com:19302'},
   {urls:'stun:stun1.l.google.com:19302'}
 ]};
+
+/* ================================================================
+   SHOWS (P2P) — scène, micros par personne, chat, bulles au-dessus des têtes
+   Firebase ne sert QUE à lister les shows + le petit signalement WebRTC pendant
+   qu'on est dans un show précis (offres/réponses/candidats ICE, très peu de
+   lectures). Tout l'audio passe en direct entre navigateurs, relayé par l'hôte
+   (pas de serveur média — donc scène plafonnée à 5 personnes en simultané).
+   ================================================================ */
+const SHOW_MAX_STAGE = 5; // nb de personnes sur scène en simultané (hors hôte)
+function genShowCode(){ return genLiveCode(); }
+let pendingShowStream = null;
+let showState = null;
+
+function renderShowsHub(main){
+  main.innerHTML = `
+    <div class="panel">
+      <div class="panel-head">🎭 Shows</div>
+      <div class="panel-body">
+        <div class="field"><label>Titre du show</label><input id="showTitleInput" placeholder="ex: Talk-show du dimanche"></div>
+        <button id="startShowBtn">Créer un show</button>
+        <div style="display:flex; gap:8px; margin-top:14px;">
+          <input id="joinShowCodeInput" placeholder="Code du show (ex: AB12CD)" style="text-transform:uppercase;">
+          <button class="secondary" id="joinShowCodeBtn">Rejoindre</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">Shows en cours</div>
+      <div class="panel-body" id="showsListBody" style="padding:0;"><div class="empty">Chargement...</div></div>
+    </div>`;
+  document.getElementById('startShowBtn').onclick = startShow;
+  document.getElementById('joinShowCodeBtn').onclick = ()=>{
+    const code = document.getElementById('joinShowCodeInput').value.trim().toUpperCase();
+    if(code) location.hash = '#shows/'+code;
+  };
+  db.collection('shows').where('active','==',true).limit(30).get().then(snap=>{
+    const body = document.getElementById('showsListBody');
+    if(!body) return;
+    if(snap.empty){ body.innerHTML = '<div class="empty">Aucun show en ce moment.</div>'; return; }
+    body.innerHTML = '';
+    snap.forEach(d=>{
+      const s = d.data();
+      const row = document.createElement('div');
+      row.className = 'show-row';
+      row.innerHTML = `<img class="avatar" src="${s.hostAvatar||fallbackAvatar()}"><div><b>${esc(s.title||'Show')}</b><div class="post-meta">par ${esc(s.hostPseudo)} · Code : ${d.id}</div></div>`;
+      row.onclick = ()=> location.hash = '#shows/'+d.id;
+      body.appendChild(row);
+    });
+  }).catch(err=>{
+    const body = document.getElementById('showsListBody');
+    if(body) body.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>';
+  });
+}
+
+async function startShow(){
+  const title = document.getElementById('showTitleInput').value.trim() || ('Show de '+currentUser.pseudo);
+  let stream;
+  try{ stream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(err){ toast("Impossible d'accéder au micro : "+err.message); return; }
+  let code = genShowCode();
+  for(let i=0;i<5;i++){
+    const existing = await db.collection('shows').doc(code).get();
+    if(!existing.exists || existing.data().active===false) break;
+    code = genShowCode();
+  }
+  await db.collection('shows').doc(code).set({
+    hostUid: currentUser.uid, hostPseudo: currentUser.pseudo, hostAvatar: currentUser.avatar||'',
+    title, active:true, currentMedia:null, battle:null,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  pendingShowStream = stream;
+  location.hash = '#shows/'+code;
+}
+
+function teardownShow(){
+  if(!showState) return;
+  const st = showState;
+  showState = null;
+  try{
+    Object.values(st.peers||{}).forEach(pc=>{ try{pc.close();}catch(e){} });
+    if(st.localStream) st.localStream.getTracks().forEach(t=>t.stop());
+    (st.remoteAudioEls||[]).forEach(el=>{ try{el.remove();}catch(e){} });
+    (st.analysers||[]).forEach(a=>{ try{a.stop(); a.ctx.close();}catch(e){} });
+    (st.extraUnsubs||[]).forEach(u=>{ try{u();}catch(e){} });
+    if(st.role==='host'){
+      db.collection('shows').doc(st.code).update({active:false}).catch(()=>{});
+    } else if(currentUser){
+      db.collection('shows').doc(st.code).collection('participants').doc(currentUser.uid).delete().catch(()=>{});
+      db.collection('shows').doc(st.code).collection('rtc').doc(currentUser.uid).delete().catch(()=>{});
+    }
+  }catch(e){ console.warn('teardownShow', e); }
+}
+
+function renderShowRoom(main, codeRaw){
+  const code = (codeRaw||'').toUpperCase();
+  teardownShow();
+  main.innerHTML = '<div class="empty">Chargement...</div>';
+  db.collection('shows').doc(code).get().then(doc=>{
+    if(!doc.exists || doc.data().active===false){
+      main.innerHTML = '<div class="panel"><div class="empty">Ce show est terminé ou n\'existe pas. <a href="#shows">← Retour</a></div></div>';
+      return;
+    }
+    const show = doc.data();
+    const isHost = show.hostUid===currentUser.uid;
+    main.innerHTML = `
+      <div class="panel">
+        <div class="panel-head"><a href="#shows">← Shows</a> · ${esc(show.title||'Show')}</div>
+        <div class="panel-body">
+          <div class="post-meta" style="margin-bottom:8px;">Animé par ${esc(show.hostPseudo)}${isHost? ' · <span class="ybadge">Code : '+code+'</span>':''}</div>
+          <div id="showMediaPanel" class="hidden"></div>
+          <div id="battleArea"></div>
+          <div class="post-meta" style="margin:10px 0 4px;">🎤 Sur scène</div>
+          <div class="stage-area" id="stageArea"></div>
+          <div id="stagePersonActionsWrap"></div>
+          <div class="post-meta" style="margin:10px 0 4px;">👥 Dans la salle</div>
+          <div class="audience-area" id="audienceArea"></div>
+          <div id="showControls" style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;"></div>
+          ${isHost? '<div id="stageRequestsBox"></div>' : ''}
+          <div id="showChatBox"></div>
+          <div id="liveChatInputRow">
+            <input id="showChatInput" placeholder="Écris un message...">
+            <button id="showChatSendBtn">Envoyer</button>
+          </div>
+        </div>
+      </div>`;
+
+    showState = {
+      role: isHost? 'host':'participant', code, show,
+      localStream:null, peers:{}, stageStreams:{}, analysers:[], extraUnsubs:[], remoteAudioEls:[],
+      stageRosterSig:null
+    };
+
+    if(isHost) initShowHost(code, show);
+    else initShowParticipant(code, show);
+
+    wireShowChat(code);
+    listenShowDoc(code, isHost);
+    unsubscribers.push(teardownShow);
+  }).catch(err=>{
+    main.innerHTML = '<div class="panel"><div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div></div>';
+  });
+}
+
+/* ---- Détection "qui parle" (contour vert + sautillement) via l'API Web Audio ---- */
+function attachSpeakingDetector(uid, stream){
+  try{
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    let raf;
+    function tick(){
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a,b)=>a+b,0)/data.length;
+      const speaking = avg > 14;
+      document.querySelectorAll('.show-person[data-uid="'+uid+'"]').forEach(el=> el.classList.toggle('speaking', speaking));
+      raf = requestAnimationFrame(tick);
+    }
+    tick();
+    if(showState) showState.analysers.push({ctx, stop(){ cancelAnimationFrame(raf); }});
+  }catch(e){ console.warn('attachSpeakingDetector', e); }
+}
+
+/* ---- Rendu de la scène + de la salle, commun host/participant ---- */
+function renderShowStageAndAudience(code, participants, isHost){
+  const stageEl = document.getElementById('stageArea');
+  const audEl = document.getElementById('audienceArea');
+  if(!stageEl || !audEl) return;
+  const stage = participants.filter(p=>p.onStage);
+  const audience = participants.filter(p=>!p.onStage);
+  stageEl.innerHTML = stage.length? '' : '<div class="post-meta" style="color:#ccc;">Personne sur scène pour le moment.</div>';
+  stage.forEach(p=>{
+    const el = document.createElement('div');
+    el.className = 'show-person'; el.dataset.uid = p.uid;
+    el.innerHTML = `<img class="avatar" src="${p.avatar||fallbackAvatar()}"><div class="sp-name">${esc(p.pseudo)}${p.isHost?' 🎙️':''}</div>${p.micEnabled===false? '<span class="mic-badge">🔇</span>':''}`;
+    if(isHost && p.uid!==currentUser.uid){
+      el.style.cursor='pointer';
+      el.onclick = ()=> openStagePersonMenu(code, p);
+    }
+    stageEl.appendChild(el);
+  });
+  audEl.innerHTML = audience.length? '' : '<div class="empty">Personne dans la salle pour le moment.</div>';
+  audience.forEach(p=>{
+    const el = document.createElement('div');
+    el.className = 'show-person'; el.dataset.uid = p.uid;
+    el.innerHTML = `<img class="avatar" src="${p.avatar||fallbackAvatar()}"><div class="sp-name">${esc(p.pseudo)}${p.requestedStage?' 🙋':''}</div>`;
+    if(isHost){
+      el.style.cursor='pointer'; el.title='Faire monter sur scène';
+      el.onclick = ()=>{
+        if(stage.length>=SHOW_MAX_STAGE){ toast('Scène pleine ('+SHOW_MAX_STAGE+' max).'); return; }
+        setParticipantStage(code, p.uid, true);
+      };
+    }
+    audEl.appendChild(el);
+  });
+}
+function openStagePersonMenu(code, p){
+  const wrap = document.getElementById('stagePersonActionsWrap');
+  if(!wrap) return;
+  const micOn = p.micEnabled!==false;
+  wrap.innerHTML = `
+    <div class="panel" style="margin-top:8px;">
+      <div class="panel-body" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <b>${esc(p.pseudo)}</b>
+        <button class="secondary small" id="spmMic">${micOn?'🔇 Couper le micro':'🎙️ Rétablir le micro'}</button>
+        <button class="danger small" id="spmDown">⬇️ Faire descendre</button>
+        <button class="secondary small" id="spmClose">✕</button>
+      </div>
+    </div>`;
+  document.getElementById('spmMic').onclick = ()=>{
+    db.collection('shows').doc(code).collection('participants').doc(p.uid).update({micEnabled: !micOn});
+    wrap.innerHTML='';
+  };
+  document.getElementById('spmDown').onclick = ()=>{ setParticipantStage(code, p.uid, false); wrap.innerHTML=''; };
+  document.getElementById('spmClose').onclick = ()=> wrap.innerHTML='';
+}
+async function setParticipantStage(code, uid, onStage){
+  await db.collection('shows').doc(code).collection('participants').doc(uid).update({onStage, requestedStage:false});
+}
+
+/* ---- Côté hôte : une connexion WebRTC par personne, relais des pistes de scène ---- */
+function initShowHost(code, show){
+  showState.localStream = pendingShowStream;
+  pendingShowStream = null;
+  db.collection('shows').doc(code).collection('participants').doc(currentUser.uid).set({
+    uid: currentUser.uid, pseudo: currentUser.pseudo, avatar: currentUser.avatar||'',
+    onStage:true, micEnabled:true, requestedStage:false, isHost:true,
+    joinedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  if(showState.localStream){
+    showState.stageStreams[currentUser.uid] = showState.localStream;
+    attachSpeakingDetector(currentUser.uid, showState.localStream);
+  }
+  renderShowControls(code, show, true);
+  listenShowParticipants(code, true);
+  listenStageRequests(code);
+}
+function listenShowParticipants(code, isHost){
+  const un = db.collection('shows').doc(code).collection('participants').onSnapshot(snap=>{
+    const participants = []; snap.forEach(d=> participants.push(d.data()));
+    renderShowStageAndAudience(code, participants, isHost);
+    if(isHost) syncHostConnections(code, participants);
+    else{
+      const stageSig = participants.filter(p=>p.onStage).map(p=>p.uid).sort().join(',');
+      const me = participants.find(p=>p.uid===currentUser.uid);
+      if(showState.stageRosterSig!==null && stageSig!==showState.stageRosterSig){
+        connectParticipantToHost(code, showState.show.hostUid, !!(me && me.onStage));
+      }
+      showState.stageRosterSig = stageSig;
+      if(me) applyMicEnforcement(me.micEnabled !== false);
+    }
+  }, err=> console.warn('listenShowParticipants', err));
+  showState.extraUnsubs.push(un);
+}
+function syncHostConnections(code, participants){
+  const others = participants.filter(p=> p.uid!==currentUser.uid);
+  const currentUids = others.map(p=>p.uid);
+  Object.keys(showState.peers).forEach(uid=>{
+    if(!currentUids.includes(uid)){
+      try{ showState.peers[uid].close(); }catch(e){}
+      delete showState.peers[uid];
+      delete showState.stageStreams[uid];
+    }
+  });
+  others.forEach(p=>{ if(!showState.peers[p.uid]) listenForParticipantOffer(code, p.uid); });
+}
+function listenForParticipantOffer(code, uid){
+  const ref = db.collection('shows').doc(code).collection('rtc').doc(uid);
+  const un = ref.onSnapshot(async snap=>{
+    const data = snap.data();
+    if(!data || !data.offer) return;
+    if(showState.peers[uid]) return; // déjà traité
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+    showState.peers[uid] = pc;
+    pc.onicecandidate = e=>{ if(e.candidate) ref.collection('hostCandidates').add(e.candidate.toJSON()); };
+    pc.ontrack = e=>{
+      let ms = showState.stageStreams[uid];
+      if(!ms || ms===showState.localStream){ ms = new MediaStream(); showState.stageStreams[uid] = ms; }
+      ms.addTrack(e.track);
+      attachSpeakingDetector(uid, ms);
+    };
+    // relaie vers cette personne le son de l'hôte + de tous les autres déjà sur scène
+    Object.entries(showState.stageStreams).forEach(([su, ms])=>{
+      if(su===uid) return;
+      ms.getTracks().forEach(t=>{ try{ pc.addTrack(t, ms); }catch(e){} });
+    });
+    await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await ref.update({answer:{type:answer.type, sdp:answer.sdp}});
+    const un2 = ref.collection('viewerCandidates').onSnapshot(csnap=>{
+      csnap.docChanges().forEach(ch=>{ if(ch.type==='added') pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())).catch(()=>{}); });
+    });
+    showState.extraUnsubs.push(un2);
+  });
+  showState.extraUnsubs.push(un);
+}
+
+/* ---- Côté participant (scène ou audience) ---- */
+function initShowParticipant(code, show){
+  db.collection('shows').doc(code).collection('participants').doc(currentUser.uid).set({
+    uid: currentUser.uid, pseudo: currentUser.pseudo, avatar: currentUser.avatar||'',
+    onStage:false, micEnabled:true, requestedStage:false, isHost:false,
+    joinedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, {merge:true});
+  renderShowControls(code, show, false);
+  listenShowParticipants(code, false);
+  connectParticipantToHost(code, show.hostUid, false);
+}
+// Chaque changement de composition de la scène => on rouvre notre connexion vers l'hôte pour
+// récupérer les pistes à jour (simple et fiable, au prix d'un micro-blanc audio le temps de renégocier).
+async function connectParticipantToHost(code, hostUid, iAmOnStage){
+  if(showState.hostPc){ try{ showState.hostPc.close(); }catch(e){} }
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+  showState.hostPc = pc;
+  showState.peers[hostUid] = pc;
+  const ref = db.collection('shows').doc(code).collection('rtc').doc(currentUser.uid);
+  if(iAmOnStage){
+    if(!showState.localStream){
+      try{ showState.localStream = await navigator.mediaDevices.getUserMedia({audio:true}); attachSpeakingDetector(currentUser.uid, showState.localStream); }
+      catch(err){ toast("Impossible d'accéder au micro : "+err.message); }
+    }
+    if(showState.localStream) showState.localStream.getTracks().forEach(t=>{ t.enabled = showState.micEnabledLocal!==false; pc.addTrack(t, showState.localStream); });
+  }
+  // slots de réception surprovisionnés pour recevoir jusqu'à SHOW_MAX_STAGE flux (hôte compris)
+  for(let i=0;i<SHOW_MAX_STAGE+1;i++) pc.addTransceiver('audio', {direction:'recvonly'});
+  pc.ontrack = e=>{
+    const audioEl = document.createElement('audio');
+    audioEl.autoplay = true; audioEl.srcObject = e.streams[0]; audioEl.style.display='none';
+    document.body.appendChild(audioEl);
+    showState.remoteAudioEls.push(audioEl);
+  };
+  pc.onicecandidate = e=>{ if(e.candidate) ref.collection('viewerCandidates').add(e.candidate.toJSON()); };
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await ref.set({offer:{type:offer.type, sdp:offer.sdp}, answer: firebase.firestore.FieldValue.delete()});
+  let answered = false;
+  const un1 = ref.onSnapshot(snap=>{
+    const data = snap.data();
+    if(data && data.answer && !answered && pc.signalingState==='have-local-offer'){
+      answered = true;
+      pc.setRemoteDescription(new RTCSessionDescription(data.answer)).catch(()=>{});
+    }
+  });
+  const un2 = ref.collection('hostCandidates').onSnapshot(snap=>{
+    snap.docChanges().forEach(ch=>{ if(ch.type==='added') pc.addIceCandidate(new RTCIceCandidate(ch.doc.data())).catch(()=>{}); });
+  });
+  showState.extraUnsubs.push(un1, un2);
+}
+function applyMicEnforcement(hostAllowsMic){
+  if(!showState) return;
+  showState.hostAllowsMic = hostAllowsMic;
+  if(!showState.localStream) return;
+  const effective = hostAllowsMic && showState.micEnabledLocal!==false;
+  showState.localStream.getAudioTracks().forEach(t=> t.enabled = effective);
+  document.getElementById('showMicToggleBtn')?.classList.toggle('secondary', !effective);
+}
+
+/* ---- Demandes pour monter sur scène ---- */
+function listenStageRequests(code){
+  const un = db.collection('shows').doc(code).collection('participants').where('requestedStage','==',true)
+    .onSnapshot(snap=>{
+      const box = document.getElementById('stageRequestsBox');
+      if(!box) return;
+      if(snap.empty){ box.innerHTML=''; return; }
+      box.innerHTML = '<div class="post-meta" style="margin:10px 0 4px;">Demandes pour monter sur scène :</div>';
+      snap.forEach(d=>{
+        const p = d.data();
+        const row = document.createElement('div');
+        row.className = 'show-req-row';
+        row.innerHTML = `<img class="avatar" src="${p.avatar||fallbackAvatar()}"><div><b>${esc(p.pseudo)}</b></div>`;
+        const acceptBtn = document.createElement('button'); acceptBtn.className='small'; acceptBtn.textContent='Accepter';
+        acceptBtn.onclick = ()=> setParticipantStage(code, p.uid, true);
+        const declineBtn = document.createElement('button'); declineBtn.className='small secondary'; declineBtn.textContent='Refuser';
+        declineBtn.onclick = ()=> d.ref.update({requestedStage:false});
+        row.appendChild(acceptBtn); row.appendChild(declineBtn);
+        box.appendChild(row);
+      });
+    }, err=> console.warn('listenStageRequests', err));
+  showState.extraUnsubs.push(un);
+}
+async function requestToJoinStage(code){
+  await db.collection('shows').doc(code).collection('participants').doc(currentUser.uid).update({requestedStage:true});
+  toast('Demande envoyée à l\'hôte !');
+}
+
+/* ---- Contrôles (micro, quitter/terminer, média, battle) ---- */
+function renderShowControls(code, show, isHost){
+  const box = document.getElementById('showControls');
+  if(!box) return;
+  box.innerHTML = '';
+  if(isHost){
+    const micBtn = document.createElement('button');
+    micBtn.id = 'showMicToggleBtn'; micBtn.className='secondary'; micBtn.textContent='🎙️ Couper mon micro';
+    micBtn.onclick = ()=>{
+      if(!showState.localStream) return;
+      const track = showState.localStream.getAudioTracks()[0];
+      if(!track) return;
+      track.enabled = !track.enabled;
+      micBtn.textContent = track.enabled? '🎙️ Couper mon micro' : '🔇 Rétablir mon micro';
+    };
+    box.appendChild(micBtn);
+
+    const mediaBtn = document.createElement('button');
+    mediaBtn.className='secondary'; mediaBtn.textContent='🖼️ Afficher un média';
+    mediaBtn.onclick = ()=> toggleShowMediaForm(code);
+    box.appendChild(mediaBtn);
+
+    const battleBtn = document.createElement('button');
+    battleBtn.className='secondary'; battleBtn.textContent='⚔️ Battle de likes';
+    battleBtn.onclick = ()=> toggleBattleForm(code);
+    box.appendChild(battleBtn);
+
+    const endBtn = document.createElement('button');
+    endBtn.className='danger'; endBtn.textContent='Terminer le show';
+    endBtn.onclick = ()=>{ teardownShow(); location.hash = '#shows'; };
+    box.appendChild(endBtn);
+  } else {
+    const reqBtn = document.createElement('button');
+    reqBtn.className='secondary'; reqBtn.textContent='🙋 Demander à monter sur scène';
+    reqBtn.onclick = ()=> requestToJoinStage(code);
+    box.appendChild(reqBtn);
+
+    const micBtn = document.createElement('button');
+    micBtn.id = 'showMicToggleBtn'; micBtn.className='secondary'; micBtn.textContent='🎙️ Couper mon micro';
+    micBtn.onclick = ()=>{
+      showState.micEnabledLocal = showState.micEnabledLocal===false ? true : false;
+      applyMicEnforcement(true);
+      micBtn.textContent = showState.micEnabledLocal===false? '🔇 Rétablir mon micro' : '🎙️ Couper mon micro';
+    };
+    box.appendChild(micBtn);
+
+    const leaveBtn = document.createElement('button');
+    leaveBtn.className='secondary'; leaveBtn.textContent='Quitter le show';
+    leaveBtn.onclick = ()=>{ teardownShow(); location.hash = '#shows'; };
+    box.appendChild(leaveBtn);
+  }
+}
+
+/* ---- Média affiché sur scène par l'hôte ---- */
+function toggleShowMediaForm(code){
+  const panel = document.getElementById('showMediaPanel');
+  if(!panel) return;
+  if(panel.dataset.formOpen){ panel.dataset.formOpen=''; renderShowMedia(null); return; }
+  panel.dataset.formOpen='1';
+  panel.classList.remove('hidden');
+  panel.innerHTML = `
+    <div style="padding:10px;background:var(--panel);">
+      <div class="field"><label>Lien média (image, vidéo, YouTube)</label><input id="showMediaUrlInput" placeholder="https://..."></div>
+      <button class="small" id="showMediaSetBtn">Afficher</button>
+      <button class="small secondary" id="showMediaClearBtn">Retirer</button>
+    </div>`;
+  document.getElementById('showMediaSetBtn').onclick = async ()=>{
+    const url = document.getElementById('showMediaUrlInput').value.trim();
+    if(!url) return;
+    const src = detectMediaSource(url);
+    await db.collection('shows').doc(code).update({currentMedia:{url, mediaType:src.mediaType, videoType:src.videoType||'', videoId:src.videoId||''}});
+  };
+  document.getElementById('showMediaClearBtn').onclick = async ()=>{
+    await db.collection('shows').doc(code).update({currentMedia:null});
+  };
+}
+function renderShowMedia(media){
+  const panel = document.getElementById('showMediaPanel');
+  if(!panel) return;
+  if(!media){ panel.classList.add('hidden'); if(!panel.dataset.formOpen) panel.innerHTML=''; return; }
+  panel.classList.remove('hidden');
+  if(media.videoType==='youtube'){ panel.innerHTML = youtubeEmbedHtml(media.videoId); }
+  else if(media.mediaType==='video'){ panel.innerHTML = `<video src="${esc(media.url)}" controls autoplay muted style="width:100%;"></video>`; }
+  else { panel.innerHTML = `<img src="${esc(media.url)}" style="width:100%;">`; }
+}
+
+/* ---- Battle de likes entre deux personnes sur scène ---- */
+function toggleBattleForm(code){
+  const area = document.getElementById('battleArea');
+  if(!area) return;
+  if(area.dataset.formOpen){ area.dataset.formOpen=''; area.querySelector('.battle-setup-form')?.remove(); return; }
+  db.collection('shows').doc(code).collection('participants').where('onStage','==',true).get().then(snap=>{
+    const stage = []; snap.forEach(d=> stage.push(d.data()));
+    if(stage.length<2){ toast('Il faut au moins 2 personnes sur scène pour une battle.'); return; }
+    area.dataset.formOpen='1';
+    const form = document.createElement('div');
+    form.className = 'panel battle-setup-form';
+    form.style.marginTop='8px';
+    form.innerHTML = `
+      <div class="panel-body">
+        <div class="field"><label>Personne A</label><select id="battleAUid">${stage.map(p=>`<option value="${p.uid}">${esc(p.pseudo)}</option>`).join('')}</select></div>
+        <div class="field"><label>Personne B</label><select id="battleBUid">${stage.map(p=>`<option value="${p.uid}">${esc(p.pseudo)}</option>`).join('')}</select></div>
+        <button class="small" id="battleStartBtn">Lancer la battle</button>
+      </div>`;
+    area.appendChild(form);
+    document.getElementById('battleStartBtn').onclick = async ()=>{
+      const aUid = document.getElementById('battleAUid').value;
+      const bUid = document.getElementById('battleBUid').value;
+      if(aUid===bUid){ toast('Choisis deux personnes différentes.'); return; }
+      const aP = stage.find(p=>p.uid===aUid), bP = stage.find(p=>p.uid===bUid);
+      await db.collection('shows').doc(code).update({
+        battle:{active:true, aUid, aPseudo:aP.pseudo, bUid, bPseudo:bP.pseudo, votesA:[], votesB:[]}
+      });
+      area.dataset.formOpen=''; form.remove();
+    };
+  });
+}
+async function voteBattle(code, side){
+  const ref = db.collection('shows').doc(code);
+  await db.runTransaction(async tx=>{
+    const doc = await tx.get(ref);
+    const battle = doc.data().battle;
+    if(!battle || !battle.active) return;
+    let votesA = battle.votesA||[], votesB = battle.votesB||[];
+    votesA = votesA.filter(u=>u!==currentUser.uid);
+    votesB = votesB.filter(u=>u!==currentUser.uid);
+    if(side==='a') votesA.push(currentUser.uid); else votesB.push(currentUser.uid);
+    tx.update(ref, {'battle.votesA':votesA, 'battle.votesB':votesB});
+  }).catch(e=> console.warn('voteBattle', e));
+}
+function renderBattle(code, battle, isHost){
+  const area = document.getElementById('battleArea');
+  if(!area) return;
+  if(!battle || !battle.active){ if(!area.dataset.formOpen) area.innerHTML=''; return; }
+  const votesA = (battle.votesA||[]).length, votesB = (battle.votesB||[]).length;
+  const total = Math.max(1, votesA+votesB);
+  const pctA = Math.round((votesA/total)*100);
+  const myVote = (battle.votesA||[]).includes(currentUser.uid) ? 'a' : (battle.votesB||[]).includes(currentUser.uid) ? 'b' : null;
+  const wrap = document.createElement('div');
+  wrap.className = 'panel';
+  wrap.style.marginTop = '8px';
+  wrap.innerHTML = `
+    <div class="panel-body">
+      <b>⚔️ ${esc(battle.aPseudo)} vs ${esc(battle.bPseudo)}</b>
+      <div class="battle-bar-wrap">
+        <button class="small ${myVote==='a'?'':'secondary'}" id="voteABtn">👍 ${esc(battle.aPseudo)} (${votesA})</button>
+        <div class="battle-bar"><div class="battle-bar-a" style="width:${pctA}%;"></div><div class="battle-bar-b" style="width:${100-pctA}%;"></div></div>
+        <button class="small ${myVote==='b'?'':'secondary'}" id="voteBBtn">👍 ${esc(battle.bPseudo)} (${votesB})</button>
+      </div>
+      ${isHost? `<button class="danger small" id="endBattleBtn" style="margin-top:8px;">Terminer la battle</button>`:''}
+    </div>`;
+  area.innerHTML = '';
+  area.appendChild(wrap);
+  document.getElementById('voteABtn').onclick = ()=> voteBattle(code, 'a');
+  document.getElementById('voteBBtn').onclick = ()=> voteBattle(code, 'b');
+  document.getElementById('endBattleBtn')?.addEventListener('click', ()=> db.collection('shows').doc(code).update({'battle.active':false}));
+}
+
+/* ---- Écoute du doc show (média affiché + battle) ---- */
+function listenShowDoc(code, isHost){
+  const un = db.collection('shows').doc(code).onSnapshot(doc=>{
+    if(!doc.exists || doc.data().active===false){
+      if(showState && showState.role!=='host'){ toast('Le show est terminé.'); teardownShow(); location.hash='#shows'; }
+      return;
+    }
+    const show = doc.data();
+    renderShowMedia(show.currentMedia);
+    renderBattle(code, show.battle, isHost);
+  }, err=> console.warn('listenShowDoc', err));
+  if(showState) showState.extraUnsubs.push(un);
+}
+
+/* ---- Chat + bulles au-dessus des têtes ---- */
+function wireShowChat(code){
+  const un = db.collection('shows').doc(code).collection('chat').orderBy('createdAt','desc').limit(50)
+    .onSnapshot(snap=>{
+      const box = document.getElementById('showChatBox');
+      if(!box) return;
+      const msgs = []; snap.forEach(d=> msgs.push(d.data()));
+      msgs.reverse();
+      box.innerHTML = '';
+      msgs.forEach(m=>{
+        const el = document.createElement('div');
+        el.className = 'live-chat-msg';
+        el.innerHTML = `<b>${esc(m.pseudo)}</b>${esc(m.text)}`;
+        box.appendChild(el);
+      });
+      box.scrollTop = box.scrollHeight;
+      snap.docChanges().forEach(ch=>{
+        if(ch.type==='added'){
+          const m = ch.doc.data();
+          showChatBubble(m.uid, m.text);
+        }
+      });
+    }, err=> console.warn('wireShowChat', err));
+  if(showState) showState.extraUnsubs.push(un);
+  document.getElementById('showChatSendBtn').onclick = ()=> sendShowChat(code);
+  document.getElementById('showChatInput').addEventListener('keydown', e=>{ if(e.key==='Enter') sendShowChat(code); });
+}
+async function sendShowChat(code){
+  const input = document.getElementById('showChatInput');
+  const text = input.value.trim();
+  if(!text) return;
+  input.value = '';
+  await db.collection('shows').doc(code).collection('chat').add({
+    uid: currentUser.uid, pseudo: currentUser.pseudo, text,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+function showChatBubble(uid, text){
+  document.querySelectorAll('.show-person[data-uid="'+uid+'"]').forEach(el=>{
+    el.querySelectorAll('.show-bubble').forEach(b=>b.remove());
+    const bubble = document.createElement('div');
+    bubble.className = 'show-bubble';
+    bubble.textContent = text.slice(0,80);
+    el.appendChild(bubble);
+    setTimeout(()=>{ bubble.remove(); }, 4000);
+  });
+}
+
 
 function genLiveCode(){
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans O/0, I/1
