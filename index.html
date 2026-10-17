@@ -377,9 +377,9 @@
     font-size:19px; font-weight:800; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
   }
   .comm-info{padding:12px 14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;}
-  .comm-tabs{display:flex; gap:4px; border-bottom:1px solid var(--border); padding:0 7px;}
+  .comm-tabs{display:flex; gap:4px; border-bottom:1px solid var(--border); padding:0 14px;}
   .comm-tabs button{
-    background:none; border:none; color:var(--text-mute); font-size:14px;
+    background:none; border:none; color:var(--text-mute); font-size:10px;
     border-bottom:2.5px solid transparent; border-radius:0; padding:5px 4px;
   }
   .comm-tabs button.on{color:var(--primary); border-bottom-color:var(--primary);}
@@ -641,7 +641,7 @@
   <div class="panel">
     <div class="panel-body">
       <h1><span style="color:var(--accent)">★</span>2Yap</h1>
-      <div class="sub">ton wi-fi débite, toi aussi maintenant.</div>
+      <div class="sub">venez parler</div>
       <div id="authTabs">
         <button id="tabLoginBtn">Connexion</button>
         <button id="tabSignupBtn" class="secondary">Créer un compte</button>
@@ -673,7 +673,7 @@
   <div id="main-col"></div>
 </div>
 
-<!-- BANNIÈRE PUB — remplace le contenu de #adBannerInner par ton vrai script/tag publicitaire
+<!-- PUB -->
      (ex: AdSense, une régie tierce...). Le bouton ✕ permet de la fermer pour la session en cours. -->
 <div id="adBanner" class="hidden">
   <div id="adBannerInner">
@@ -732,9 +732,44 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 let currentUser = null; // {uid, pseudo, email, bio, avatar, following, followers}
-const ADMIN_EMAILS = ['amanivoyou23@gmail.com','zomanifrance@gmail.com'];
-function isAdmin(){ return !!(currentUser && ADMIN_EMAILS.includes((currentUser.email||'').toLowerCase())); }
-function isAdminEmail(email){ return ADMIN_EMAILS.includes((email||'').toLowerCase()); }
+// Les admins sont désormais dans la collection Firestore "admins/{uid}" (verrouillée par les règles,
+// voir firestore.rules). Cette liste d'emails ne sert QU'À AMORCER le tout premier admin : au login,
+// si ton email est dedans et que tu n'es pas encore dans "admins", l'app t'y ajoute. Ensuite,
+// seul un admin existant peut en ajouter d'autres (ou les retirer), depuis l'app.
+const ADMIN_BOOTSTRAP_EMAILS = ['amanivoyou23@gmail.com','zomanifrance@gmail.com'];
+const adminUidCache = new Set();
+function isAdmin(){ return !!(currentUser && adminUidCache.has(currentUser.uid)); }
+// Compat : beaucoup d'endroits appellent isAdminEmail(email) pour l'affichage (∞ Yappers, etc.).
+// On ne peut plus le déduire d'un email seul, donc on se base sur le cache des UIDs admin
+// pour l'utilisateur courant, et sur un champ mis en cache sur le profil pour les autres.
+function isAdminEmail(email){
+  if(currentUser && (currentUser.email||'').toLowerCase() === (email||'').toLowerCase()) return isAdmin();
+  return false;
+}
+async function loadAdminStatus(){
+  try{
+    const snap = await db.collection('admins').get();
+    adminUidCache.clear();
+    snap.forEach(d=> adminUidCache.add(d.id));
+  }catch(e){ console.warn('loadAdminStatus', e); }
+  // Amorçage : premier admin via email (une seule fois, si la collection est vide)
+  if(currentUser && adminUidCache.size===0 && ADMIN_BOOTSTRAP_EMAILS.includes((currentUser.email||'').toLowerCase())){
+    try{
+      await db.collection('admins').doc(currentUser.uid).set({
+        addedBy:'bootstrap', addedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      adminUidCache.add(currentUser.uid);
+    }catch(e){ console.warn('bootstrap admin', e); }
+  }
+}
+async function addAdmin(uid){
+  await db.collection('admins').doc(uid).set({addedBy: currentUser.uid, addedAt: firebase.firestore.FieldValue.serverTimestamp()});
+  adminUidCache.add(uid);
+}
+async function removeAdmin(uid){
+  await db.collection('admins').doc(uid).delete();
+  adminUidCache.delete(uid);
+}
 // Les comptes admin ont des Yappers illimités (tous les paliers débloqués, jamais bloqués).
 function effectiveYappers(u){ return (u && isAdminEmail(u.email)) ? Infinity : ((u&&u.yappers)||0); }
 const REPORT_EMAIL_TARGET = 'zomanifrance@gmail.com';
@@ -1697,8 +1732,8 @@ async function checkAutoBan(uid){
   try{
     const userDoc = await db.collection('users').doc(uid).get();
     if(!userDoc.exists) return;
-    const email = (userDoc.data().email||'').toLowerCase();
-    if(ADMIN_EMAILS.includes(email)) return; // jamais les admins
+    const adminSnap = await db.collection('admins').doc(uid).get();
+    if(adminSnap.exists) return; // jamais les admins
     const reportsSnap = await db.collection('reports').where('reportedUid','==',uid).get();
     if(reportsSnap.size >= BAN_THRESHOLD && !userDoc.data().banned){
       await db.collection('users').doc(uid).update({banned:true, banType:'normal'});
@@ -1776,6 +1811,7 @@ auth.onAuthStateChanged(async user=>{
       return;
     }
     currentUser = {uid:user.uid, ...doc.data()};
+    await loadAdminStatus();
     if(currentUser.accountDeleted){
       await auth.signOut();
       currentUser = null;
@@ -5589,12 +5625,63 @@ window.addEventListener('message', async (e)=>{
 });
 
 /* ---------------- ADMIN ---------------- */
+async function loadAdminListUI(){
+  const box = document.getElementById('adminListBox');
+  if(!box) return;
+  try{
+    const snap = await db.collection('admins').get();
+    if(snap.empty){ box.innerHTML = '<div class="empty">Aucun admin enregistré.</div>'; return; }
+    box.innerHTML = '';
+    const rows = await Promise.all(snap.docs.map(d=> db.collection('users').doc(d.id).get().then(u=>({uid:d.id, pseudo: u.exists? u.data().pseudo : '(compte supprimé)'}))));
+    rows.forEach(r=>{
+      const row = document.createElement('div');
+      row.className = 'live-join-row';
+      row.innerHTML = `<div><b>${esc(r.pseudo)}</b> ${r.uid===currentUser.uid?'<span class="ybadge">Toi</span>':''}<div class="post-meta">${esc(r.uid)}</div></div>`;
+      if(r.uid!==currentUser.uid){
+        const btn = document.createElement('button');
+        btn.className='danger small'; btn.textContent='Retirer';
+        btn.onclick = async ()=>{
+          if(!confirm('Retirer les droits admin à '+r.pseudo+' ?')) return;
+          await removeAdmin(r.uid);
+          loadAdminListUI();
+        };
+        row.appendChild(btn);
+      }
+      box.appendChild(row);
+    });
+  }catch(err){ box.innerHTML = '<div class="empty">Erreur : '+esc(friendlyFirestoreError(err))+'</div>'; }
+}
+
 function renderAdmin(main){
   if(!isAdmin()){
     main.innerHTML = '<div class="panel"><div class="empty">Accès réservé aux administrateurs.</div></div>';
     return;
   }
-  main.innerHTML = '<div class="panel"><div class="panel-head">🛡️ Panneau admin — Signalements</div><div class="panel-body" id="adminBody"><div class="empty">Chargement...</div></div></div>';
+  main.innerHTML = `
+    <div class="panel">
+      <div class="panel-head">👑 Gérer les admins</div>
+      <div class="panel-body">
+        <div class="post-meta" style="margin-bottom:8px;">Un admin peut bannir, supprimer des comptes et modérer tout le contenu. Ajoute uniquement des gens de confiance.</div>
+        <div id="adminListBox"><div class="empty">Chargement...</div></div>
+        <div class="field" style="margin-top:10px;"><label>Ajouter un admin (UID du compte)</label>
+          <input id="addAdminUidInput" placeholder="ex: 9aB3kx...">
+          <button class="small" id="addAdminBtn" style="margin-top:6px;align-self:flex-start;">Ajouter</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel"><div class="panel-head">🛡️ Panneau admin — Signalements</div><div class="panel-body" id="adminBody"><div class="empty">Chargement...</div></div></div>`;
+  loadAdminListUI();
+  document.getElementById('addAdminBtn').onclick = async ()=>{
+    const uid = document.getElementById('addAdminUidInput').value.trim();
+    if(!uid) return;
+    const userDoc = await db.collection('users').doc(uid).get();
+    if(!userDoc.exists){ toast('Aucun compte avec cet UID.'); return; }
+    if(!confirm('Donner les droits admin à '+userDoc.data().pseudo+' ?')) return;
+    await addAdmin(uid);
+    document.getElementById('addAdminUidInput').value = '';
+    toast(userDoc.data().pseudo+' est maintenant admin.');
+    renderAdmin(main);
+  };
   db.collection('reports').orderBy('createdAt','desc').limit(300).get().then(async snap=>{
     const reports = []; snap.forEach(d=> reports.push({id:d.id, ...d.data()}));
     const body = document.getElementById('adminBody');
