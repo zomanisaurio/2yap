@@ -379,8 +379,8 @@
   .comm-info{padding:12px 14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;}
   .comm-tabs{display:flex; gap:4px; border-bottom:1px solid var(--border); padding:0 14px;}
   .comm-tabs button{
-    background:none; border:none; color:var(--text-mute); font-size:10px;
-    border-bottom:2.5px solid transparent; border-radius:0; padding:5px 4px;
+    background:none; border:none; color:var(--text-mute); font-size:14px;
+    border-bottom:2.5px solid transparent; border-radius:0; padding:10px 8px;
   }
   .comm-tabs button.on{color:var(--primary); border-bottom-color:var(--primary);}
 
@@ -641,7 +641,7 @@
   <div class="panel">
     <div class="panel-body">
       <h1><span style="color:var(--accent)">★</span>2Yap</h1>
-      <div class="sub">venez parler, c'est marrant</div>
+      <div class="sub">le web social comme avant.</div>
       <div id="authTabs">
         <button id="tabLoginBtn">Connexion</button>
         <button id="tabSignupBtn" class="secondary">Créer un compte</button>
@@ -673,7 +673,8 @@
   <div id="main-col"></div>
 </div>
 
-<!-- PUB (ex: AdSense, une régie tierce...). Le bouton ✕ permet de la fermer pour la session en cours. -->
+<!-- BANNIÈRE PUB — remplace le contenu de #adBannerInner par ton vrai script/tag publicitaire
+     (ex: AdSense, une régie tierce...). Le bouton ✕ permet de la fermer pour la session en cours. -->
 <div id="adBanner" class="hidden">
   <div id="adBannerInner">
     <span class="ad-label">Publicité</span>
@@ -845,6 +846,85 @@ async function evaluateBadges(uid){
     }
   }catch(e){ console.warn('evaluateBadges', e); }
 }
+/* ================= YAPPERS : ÉCONOMIE ================= */
+const YAP_BOOST_COST = 50;          // coût pour booster un de tes posts
+const YAP_BOOST_HOURS = 6;          // durée du boost
+const YAP_DAILY_BONUS = 5;          // bonus de connexion quotidien
+const YAP_LIKE_REWARD = 2;          // gain pour l'auteur quand quelqu'un like (1 fois par post et par personne)
+const YAP_GIFT_DAILY_CAP = 20;      // max de Yappers que tu peux offrir par jour
+const YAP_CREATE_COMMUNITY_MIN = 100; // palier "Confirmé" requis pour créer une communauté
+
+function todayKey(){ return new Date().toISOString().slice(0,10); }
+function dailyYapperBonus(){
+  if(!currentUser) return;
+  const ls = safeLS(); if(!ls) return;
+  const key = '2yap_daily_'+currentUser.uid;
+  if(ls.getItem(key)===todayKey()) return;
+  ls.setItem(key, todayKey());
+  grantYappers(currentUser.uid, YAP_DAILY_BONUS);
+  toast('Bonus du jour : +'+YAP_DAILY_BONUS+' Yappers 🪙');
+}
+function rewardLikeOnce(postId, authorUid){
+  const ls = safeLS(); if(!ls || !authorUid || authorUid===currentUser.uid) return;
+  const key = '2yap_liked_rewarded';
+  const done = JSON.parse(ls.getItem(key)||'[]');
+  if(done.includes(postId)) return;
+  done.push(postId); if(done.length>500) done.splice(0, done.length-500);
+  ls.setItem(key, JSON.stringify(done));
+  grantYappers(authorUid, YAP_LIKE_REWARD);
+}
+function isBoostActive(p){
+  const b = p.boostUntil;
+  if(!b) return false;
+  const ms = typeof b.toMillis==='function' ? b.toMillis() : (typeof b==='number' ? b : 0);
+  return ms > Date.now();
+}
+// Les posts boostés passent en tête (ordre d'origine conservé pour le reste)
+function sortBoostedFirst(posts){
+  return posts.slice().sort((a,b)=> (isBoostActive(b)?1:0) - (isBoostActive(a)?1:0));
+}
+async function boostPost(postId){
+  if(effectiveYappers(currentUser) < YAP_BOOST_COST){ toast('Il faut '+YAP_BOOST_COST+' Yappers pour booster.'); return; }
+  if(!confirm('Booster ce post pendant '+YAP_BOOST_HOURS+' h pour '+YAP_BOOST_COST+' Yappers ?')) return;
+  try{
+    await db.collection('posts').doc(postId).update({
+      boostUntil: firebase.firestore.Timestamp.fromMillis(Date.now()+YAP_BOOST_HOURS*3600*1000)
+    });
+    await grantYappers(currentUser.uid, -YAP_BOOST_COST);
+    toast('Post boosté 🚀');
+    router();
+  }catch(err){ toast('Erreur : '+friendlyFirestoreError(err)); }
+}
+function giftSentToday(){
+  const ls = safeLS(); if(!ls||!currentUser) return 0;
+  return parseInt(ls.getItem('2yap_gift_'+currentUser.uid+'_'+todayKey())||'0',10);
+}
+async function giftYappers(targetUid, amount, main){
+  if(!(amount>0)){ toast('Montant invalide.'); return; }
+  amount = Math.floor(amount);
+  const sent = giftSentToday();
+  if(sent+amount > YAP_GIFT_DAILY_CAP){ toast('Tu peux encore offrir '+(YAP_GIFT_DAILY_CAP-sent)+' Yappers aujourd\'hui.'); return; }
+  if(effectiveYappers(currentUser) < amount){ toast('Pas assez de Yappers.'); return; }
+  try{
+    const batch = db.batch();
+    batch.update(db.collection('users').doc(currentUser.uid), {yappers: firebase.firestore.FieldValue.increment(-amount)});
+    batch.update(db.collection('users').doc(targetUid), {yappers: firebase.firestore.FieldValue.increment(amount)});
+    await batch.commit();
+    currentUser.yappers = (currentUser.yappers||0) - amount;
+    const ls = safeLS();
+    if(ls) ls.setItem('2yap_gift_'+currentUser.uid+'_'+todayKey(), String(sent+amount));
+    toast('💛 '+amount+' Yappers offerts !');
+    renderProfile(main, targetUid);
+  }catch(err){ toast('Erreur : '+friendlyFirestoreError(err)); }
+}
+function giftYappersPrompt(targetUid, main){
+  const left = YAP_GIFT_DAILY_CAP - giftSentToday();
+  if(left<=0){ toast('Tu as déjà offert tes Yappers du jour (max '+YAP_GIFT_DAILY_CAP+').'); return; }
+  const v = prompt('Combien de Yappers offrir ? (max '+left+' aujourd\'hui)', String(Math.min(5,left)));
+  if(v===null) return;
+  giftYappers(targetUid, parseInt(v,10), main);
+}
+
 async function incrementUserStat(uid, field, amount=1){
   if(!uid) return;
   try{
@@ -1507,7 +1587,7 @@ function renderCommentNode(cm, replies){
       <img class="avatar" style="width:28px;height:28px;border-radius:8px;" src="${cm.authorAvatar||fallbackAvatar()}">
       <div class="comment-body" style="flex:1;">
         <b>${esc(cm.authorPseudo)}</b>
-        ${cm.text? `<div class="comment-text">${esc(cm.text)}</div>`:''}
+        ${cm.text? `<div class="comment-text">${mentionHtml(cm.text)}</div>`:''}
         ${cm.gifUrl? `<img class="comment-gif" src="${esc(cm.gifUrl)}">`:''}
         <div class="comment-meta">${timeAgo(cm.createdAt)}</div>
         <div class="comment-actions">
@@ -1586,6 +1666,7 @@ async function sendCommentText(text, parentId, inputEl){
     if(pd.exists){
       const post = pd.data();
       createNotification(post.authorUid, currentUser.pseudo+' a commenté ton post.', '#community/'+post.communityId);
+      notifyMentions(text, '#community/'+post.communityId);
     }
   }).catch(()=>{});
   incrementUserStat(currentUser.uid, 'commentsCount', 1);
@@ -1811,6 +1892,7 @@ auth.onAuthStateChanged(async user=>{
     }
     currentUser = {uid:user.uid, ...doc.data()};
     await loadAdminStatus();
+    dailyYapperBonus();
     if(currentUser.accountDeleted){
       await auth.signOut();
       currentUser = null;
@@ -1996,6 +2078,25 @@ async function createNotification(toUid, text, link){
   }catch(e){ console.warn('createNotification', e); }
 }
 
+/* ---------------- MENTIONS (@pseudo) ---------------- */
+const MENTION_RE = /@([\p{L}\p{N}_][\p{L}\p{N}_.-]{0,18}[\p{L}\p{N}_])/gu;
+// Affiche le texte (échappé) avec les @mentions en surbrillance
+function mentionHtml(text){
+  return esc(text).replace(MENTION_RE, '<span class="mention">@$1</span>');
+}
+// Notifie chaque personne mentionnée (5 max par message, pas soi-même)
+async function notifyMentions(text, link){
+  if(!text || !currentUser) return;
+  const names = [...new Set([...text.matchAll(MENTION_RE)].map(m=>m[1]))].slice(0,5);
+  for(const name of names){
+    if(name.toLowerCase()===(currentUser.pseudo||'').toLowerCase()) continue;
+    try{
+      const snap = await db.collection('users').where('pseudo','==',name).limit(1).get();
+      snap.forEach(d=> createNotification(d.id, currentUser.pseudo+' t\'a mentionné(e) : '+text.slice(0,60), link));
+    }catch(e){ console.warn('notifyMentions', e); }
+  }
+}
+
 /* ---------------- MY COMMUNITIES SIDEBAR ---------------- */
 let myCommunitiesUnsub = null;
 let myJoinedCommunityIds = [];
@@ -2100,7 +2201,7 @@ async function fetchHomeFeed(poolIds){
     if(!body) return;
     let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
     if(poolIds.length) posts = posts.filter(p=> poolIds.includes(p.communityId));
-    posts = posts.slice(0, 40);
+    posts = sortBoostedFirst(posts).slice(0, 40);
     if(posts.length===0){ body.innerHTML='<div class="empty">Aucun post. Rejoins ou crée une communauté !</div>'; return; }
     await resolveChunkedMedia(posts);
     cachePostsOffline(posts);
@@ -2131,10 +2232,10 @@ function renderPostCard(id, p){
       <img class="avatar" src="${p.authorAvatar||fallbackAvatar()}">
       <div>
         <div><a href="#profile/${p.authorUid}"><b>${esc(p.authorPseudo)}</b></a> · <a href="#community/${p.communityId}"><span class="ybadge">y/${esc(p.communitySlug||p.communityId)}</span></a></div>
-        <div class="post-meta">${timeAgo(p.createdAt)}</div>
+        <div class="post-meta">${timeAgo(p.createdAt)}${isBoostActive(p)?' · 🚀 Boosté':''}</div>
       </div>
     </div>
-    ${p.text? `<div class="post-text">${esc(p.text)}</div>`:''}
+    ${p.text? `<div class="post-text">${mentionHtml(p.text)}</div>`:''}
     ${p.offlineMediaUnavailable? `<div class="post-meta" style="padding:8px;background:var(--bg);border-radius:8px;">📴 Média non disponible hors-ligne (${p.mediaType==='audio'?'audio':'vidéo'} enregistré directement, pas via un lien).</div>` : `
     ${p.mediaType==='video' && p.videoType==='youtube'? youtubeEmbedHtml(p.videoId) : ''}
     ${p.mediaType==='video' && p.videoType!=='youtube'? videoPlayerHtml(p.mediaUrl||p.mediaBase64, p.musicUrl) : ''}
@@ -2146,6 +2247,7 @@ function renderPostCard(id, p){
       <button class="vote-btn ${disliked?'active-dislike':''}" data-act="dislike">👎 ${(p.dislikes||[]).length}</button>
       <button class="vote-btn" data-act="comments">💬 <span class="cmt-count">···</span></button>
       ${p.authorUid!==currentUser.uid? `<button class="vote-btn" data-act="report" style="margin-left:auto;">🚩</button>`:''}
+      ${(p.authorUid===currentUser.uid && !isBoostActive(p))? `<button class="vote-btn" data-act="boost" style="margin-left:auto;">🚀 Booster (${YAP_BOOST_COST} 🪙)</button>`:''}
       ${(p.authorUid===currentUser.uid || isAdmin())? `<button class="vote-btn" data-act="delete" style="margin-left:${p.authorUid!==currentUser.uid?'6px':'auto'};color:var(--red);">🗑️</button>`:''}
     </div>
   `;
@@ -2156,7 +2258,8 @@ function renderPostCard(id, p){
       if(btn.dataset.act==='comments') openComments(id);
       else if(btn.dataset.act==='delete') deletePost(id);
       else if(btn.dataset.act==='report') openReport(p.authorUid, p.authorPseudo, 'post', id);
-      else { optimisticVoteUpdate(div, p, btn.dataset.act); vote(id, btn.dataset.act); }
+      else if(btn.dataset.act==='boost') boostPost(id);
+      else { optimisticVoteUpdate(div, p, btn.dataset.act); vote(id, btn.dataset.act, p.authorUid); }
     };
   });
   db.collection('posts').doc(id).collection('comments').get().then(s=>{
@@ -2218,10 +2321,12 @@ function optimisticVoteUpdate(div, p, act){
   if(dislikeBtn){ dislikeBtn.textContent = '👎 '+p.dislikes.length; dislikeBtn.classList.toggle('active-dislike', p.dislikes.includes(uid)); }
 }
 
-async function vote(postId, act){
+async function vote(postId, act, authorUid){
   playSound('like');
   const ref = db.collection('posts').doc(postId);
+  let liked = false;
   await db.runTransaction(async t=>{
+    liked = false;
     const doc = await t.get(ref);
     if(!doc.exists) return;
     const data = doc.data();
@@ -2229,13 +2334,14 @@ async function vote(postId, act){
     const uid = currentUser.uid;
     if(act==='like'){
       if(likes.includes(uid)) likes = likes.filter(u=>u!==uid);
-      else { likes.push(uid); dislikes = dislikes.filter(u=>u!==uid); }
+      else { likes.push(uid); liked = true; dislikes = dislikes.filter(u=>u!==uid); }
     } else {
       if(dislikes.includes(uid)) dislikes = dislikes.filter(u=>u!==uid);
       else { dislikes.push(uid); likes = likes.filter(u=>u!==uid); }
     }
     t.update(ref, {likes, dislikes});
   });
+  if(liked && authorUid) rewardLikeOnce(postId, authorUid);
 }
 
 /* ---------------- GIF PACKS ---------------- */
@@ -2787,6 +2893,7 @@ function renderExplore(main, query){
     const grid = document.getElementById('exploreGrid');
     if(!grid) return;
     const filtered = all.filter(c => !q || (c.slug||'').includes(q) || (c.category||'').toLowerCase().includes(q) || (c.name||'').toLowerCase().includes(q));
+    filtered.sort((a,b)=> (b.reputation||0) - (a.reputation||0)); // les communautés les plus actives en premier
     if(filtered.length===0){ grid.innerHTML='<div class="empty">Aucune communauté trouvée.</div>'; return; }
     grid.innerHTML='';
     filtered.forEach(c=>{
@@ -2797,7 +2904,7 @@ function renderExplore(main, query){
         <div class="thumb" style="background-image:url('${c.thumbnail||''}')"></div>
         <div class="cc-body">
           <div class="cc-name">${c.joinCode?'🔒 ':''}y/${esc(c.slug)}</div>
-          <div class="cc-cat">${esc(c.category||'Général')} · ${(c.members||[]).length} membres</div>
+          <div class="cc-cat">${esc(c.category||'Général')} · ${(c.members||[]).length} membres · 🏆 ${c.reputation||0}</div>
         </div>`;
       grid.appendChild(el);
     });
@@ -2840,6 +2947,7 @@ function renderCreateCommunity(main){
     const name = document.getElementById('ccName').value;
     const slug = slugify(name);
     const msgEl = document.getElementById('ccMsg');
+    if(!isAdmin() && effectiveYappers(currentUser) < YAP_CREATE_COMMUNITY_MIN){ msgEl.textContent='Il faut '+YAP_CREATE_COMMUNITY_MIN+' Yappers (palier Confirmé) pour créer une communauté.'; return; }
     if(slug.length<2){ msgEl.textContent='Nom invalide (lettres/chiffres, min 2 caractères).'; return; }
     const exists = await db.collection('communities').doc(slug).get();
     if(exists.exists){ msgEl.textContent='Ce nom de communauté existe déjà.'; return; }
@@ -3078,6 +3186,11 @@ function renderCommunitySettings(main, slug){
 /* ---------------- COMMUNITY PAGE ---------------- */
 let communityTab = 'posts';
 let communitySubFilter = null; // slug de la sous-tranche active dans l'onglet Posts (null = tous les posts)
+// Pagination de l'onglet Posts : on charge les N derniers posts, puis on peut en voir 10 de plus ou tous.
+let communityPostsLimit = 10;
+let communityShowAll = false;
+let communityHasMore = false;
+function resetCommunityPaging(){ communityPostsLimit = 10; communityShowAll = false; communityHasMore = false; }
 let communitySubNames = {}; // cache slug -> nom affichable, alimenté par renderCommunitySubs
 /* ---------------- MUSIQUE DE FOND DE COMMUNAUTÉ ---------------- */
 function pauseCommunityBgMusic(){
@@ -3111,6 +3224,7 @@ function renderCommunity(main, slug){
     const canPost = c.postPermission!=='admins' || cAdmin;
     communityTab = 'posts';
     communitySubFilter = null;
+    resetCommunityPaging();
     main.innerHTML = `
       <div class="panel">
         <div class="comm-banner" style="background-image:url('${esc(c.bannerGifUrl||c.thumbnail||'')}'); ${c.largeLayout?'height:220px;':''}">
@@ -3322,6 +3436,8 @@ function toggleNewPost(slug, c){
     submitBtn.disabled = false; submitBtn.textContent = 'Publier';
     const yGain = 8 + Math.floor(Math.random()*5); // ~10 Yappers, variable
     grantYappers(currentUser.uid, yGain);
+      db.collection('communities').doc(slug).update({reputation: firebase.firestore.FieldValue.increment(1)}).catch(()=>{});
+      notifyMentions(text, '#community/'+slug);
     await incrementUserStat(currentUser.uid, 'postsCount', 1);
     evaluateBadges(currentUser.uid);
     area.innerHTML=''; playSound('publish'); toast('Post publié ! +'+yGain+' Yappers 🪙');
@@ -3399,6 +3515,8 @@ function toggleNewAudioPost(slug, c){
       }
       const yGain = 8 + Math.floor(Math.random()*5);
       grantYappers(currentUser.uid, yGain);
+      db.collection('communities').doc(slug).update({reputation: firebase.firestore.FieldValue.increment(1)}).catch(()=>{});
+      notifyMentions(desc, '#community/'+slug);
       await incrementUserStat(currentUser.uid, 'postsCount', 1);
       evaluateBadges(currentUser.uid);
       area.innerHTML=''; playSound('publish'); toast('Audio publié ! +'+yGain+' Yappers 🪙');
@@ -3416,12 +3534,20 @@ async function listenCommunityFeed(slug, c){
   const feed = document.getElementById('communityFeed');
   if(feed) feed.innerHTML = '<div class="empty">Chargement...</div>';
   try{
-    const snap = await db.collection('posts').where('communityId','==',slug).get();
+    let q = db.collection('posts').where('communityId','==',slug);
+    if(communitySubFilter) q = q.where('subSlug','==',communitySubFilter);
+    const paged = communityTab==='posts';
+    if(paged){
+      q = q.orderBy('createdAt','desc');
+      if(!communityShowAll) q = q.limit(communityPostsLimit);
+    }
+    const snap = await q.get();
+    communityHasMore = paged && !communityShowAll && snap.size === communityPostsLimit;
     let posts = []; snap.forEach(d=> posts.push({id:d.id, ...d.data()}));
     posts.sort((a,b)=> (b.createdAt? b.createdAt.toMillis():Date.now()) - (a.createdAt? a.createdAt.toMillis():Date.now()));
+    posts = sortBoostedFirst(posts);
     await resolveChunkedMedia(posts);
     cachePostsOffline(posts);
-    if(communitySubFilter) posts = posts.filter(p=> p.subSlug===communitySubFilter);
     if(!document.getElementById('communityFeed')) return; // la page a changé pendant le chargement
     if(communityTab==='video'){
       const shorts = posts.filter(p=> (p.mediaType==='video'&&p.videoType!=='youtube')||p.mediaType==='image');
@@ -3431,6 +3557,7 @@ async function listenCommunityFeed(slug, c){
     }
   }catch(err){
     console.error(err);
+    communityHasMore = false;
     let offline = await getOfflinePosts(p=> p.communityId===slug);
     if(communitySubFilter) offline = offline.filter(p=> p.subSlug===communitySubFilter);
     if(!document.getElementById('communityFeed')) return;
@@ -3447,12 +3574,23 @@ async function listenCommunityFeed(slug, c){
   }
 }
 
+// Barre "Afficher 10 plus" / "Afficher tous les posts" en bas du fil (seulement s'il reste des posts à charger)
+function appendCommunityLoadMore(feed, slug, c){
+  if(!communityHasMore || communityTab!=='posts') return;
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:12px;border-top:1px solid var(--border);';
+  bar.innerHTML = '<button class="secondary small" id="loadMoreTenBtn">Afficher 10 plus</button><button class="secondary small" id="loadAllPostsBtn">Afficher tous les posts</button>';
+  feed.appendChild(bar);
+  document.getElementById('loadMoreTenBtn').onclick = ()=>{ communityPostsLimit += 10; listenCommunityFeed(slug, c); };
+  document.getElementById('loadAllPostsBtn').onclick = ()=>{ communityShowAll = true; listenCommunityFeed(slug, c); };
+}
+
 async function renderCommunityFeed(feed, posts, c, slug, offline){
   if(!feed) return;
   const filterBar = (offline? offlineBannerHtml() : '') + (communitySubFilter
     ? `<div class="post-meta" style="padding:8px 14px;border-bottom:1px solid var(--border);">🏷️ Filtré sur <b>${esc(communitySubNames[communitySubFilter]||communitySubFilter)}</b> — <a href="javascript:void(0)" id="clearSubFilter">voir tous les posts</a></div>`
     : '');
-  if(posts.length===0){ feed.innerHTML = filterBar+'<div class="empty">Rien à afficher ici pour le moment.</div>'; document.getElementById('clearSubFilter')?.addEventListener('click', ()=>{ communitySubFilter=null; listenCommunityFeed(slug, c); }); return; }
+  if(posts.length===0){ feed.innerHTML = filterBar+'<div class="empty">Rien à afficher ici pour le moment.</div>'; document.getElementById('clearSubFilter')?.addEventListener('click', ()=>{ communitySubFilter=null; resetCommunityPaging(); listenCommunityFeed(slug, c); }); return; }
   const counts = await Promise.all(posts.map(p=> db.collection('posts').doc(p.id).collection('comments').get().then(s=>s.size).catch(()=>0)));
   // Render via sandboxed iframe so community custom CSS only affects this feed
   const postsHtml = posts.map((p,i)=>`
@@ -3464,7 +3602,7 @@ async function renderCommunityFeed(feed, posts, c, slug, offline){
           <div class="post-meta">${timeAgo(p.createdAt)}${p.subSlug? ' · 🏷️ '+esc(communitySubNames[p.subSlug]||p.subSlug):''}</div>
         </div>
       </div>
-      ${p.text? `<div class="post-text">${esc(p.text)}</div>`:''}
+      ${p.text? `<div class="post-text">${mentionHtml(p.text)}</div>`:''}
       ${p.offlineMediaUnavailable? `<div class="post-meta" style="padding:8px;background:#f1f2f6;border-radius:6px;">📴 Média non disponible hors-ligne.</div>` : `
       ${p.mediaType==='video' && p.videoType==='youtube'? youtubeEmbedHtml(p.videoId) : ''}
       ${p.mediaType==='video' && p.videoType!=='youtube'? videoPlayerHtml(p.mediaUrl||p.mediaBase64, p.musicUrl) : ''}
@@ -3472,8 +3610,8 @@ async function renderCommunityFeed(feed, posts, c, slug, offline){
       ${p.mediaType==='audio'? audioPlayerHtml(p) : ''}
       `}
       <div class="post-actions">
-        <button class="post-likes${(p.likes||[]).includes(currentUser.uid)?' voted':''}" data-id="${p.id}" data-likes="${(p.likes||[]).length}" data-dislikes="${(p.dislikes||[]).length}" data-liked="${(p.likes||[]).includes(currentUser.uid)?'1':'0'}" data-disliked="${(p.dislikes||[]).includes(currentUser.uid)?'1':'0'}">👍 ${(p.likes||[]).length}</button>
-        <button class="post-dislikes${(p.dislikes||[]).includes(currentUser.uid)?' voted':''}" data-id="${p.id}" data-likes="${(p.likes||[]).length}" data-dislikes="${(p.dislikes||[]).length}" data-liked="${(p.likes||[]).includes(currentUser.uid)?'1':'0'}" data-disliked="${(p.dislikes||[]).includes(currentUser.uid)?'1':'0'}">👎 ${(p.dislikes||[]).length}</button>
+        <button class="post-likes${(p.likes||[]).includes(currentUser.uid)?' voted':''}" data-id="${p.id}" data-author="${esc(p.authorUid)}" data-likes="${(p.likes||[]).length}" data-dislikes="${(p.dislikes||[]).length}" data-liked="${(p.likes||[]).includes(currentUser.uid)?'1':'0'}" data-disliked="${(p.dislikes||[]).includes(currentUser.uid)?'1':'0'}">👍 ${(p.likes||[]).length}</button>
+        <button class="post-dislikes${(p.dislikes||[]).includes(currentUser.uid)?' voted':''}" data-id="${p.id}" data-author="${esc(p.authorUid)}" data-likes="${(p.likes||[]).length}" data-dislikes="${(p.dislikes||[]).length}" data-liked="${(p.likes||[]).includes(currentUser.uid)?'1':'0'}" data-disliked="${(p.dislikes||[]).includes(currentUser.uid)?'1':'0'}">👎 ${(p.dislikes||[]).length}</button>
         <button class="post-comments" onclick="parent.postMessage({type:'comments',id:'${p.id}'},'*')">💬 ${counts[i]}</button>
         ${p.authorUid!==currentUser.uid? `<button class="post-report" data-uid="${esc(p.authorUid)}" data-pseudo="${esc(p.authorPseudo)}" data-target="${esc(p.id)}">🚩</button>`:''}
         ${(p.authorUid===currentUser.uid || isAdmin())? `<button class="post-delete" onclick="parent.postMessage({type:'delete',id:'${p.id}'},'*')">🗑️</button>`:''}
@@ -3559,7 +3697,7 @@ async function renderCommunityFeed(feed, posts, c, slug, offline){
           dislikeBtn.textContent = '👎 '+dislikes;
           likeBtn.classList.toggle('voted', liked);
           dislikeBtn.classList.toggle('voted', disliked);
-          parent.postMessage({type:'vote', id:btn.dataset.id, act}, '*');
+          parent.postMessage({type:'vote', id:btn.dataset.id, author:btn.dataset.author, act}, '*');
         });
       });
       function fmtTime(s){ if(!isFinite(s)||s<0) return '0:00'; const m=Math.floor(s/60), sec=Math.floor(s%60); return m+':'+(sec<10?'0':'')+sec; }
@@ -3650,7 +3788,8 @@ async function renderCommunityFeed(feed, posts, c, slug, offline){
   </body></html>`;
   feed.innerHTML=filterBar;
   feed.appendChild(iframe);
-  document.getElementById('clearSubFilter')?.addEventListener('click', ()=>{ communitySubFilter=null; listenCommunityFeed(slug, c); });
+  appendCommunityLoadMore(feed, slug, c);
+  document.getElementById('clearSubFilter')?.addEventListener('click', ()=>{ communitySubFilter=null; resetCommunityPaging(); listenCommunityFeed(slug, c); });
 }
 
 /* ================================================================
@@ -3706,6 +3845,7 @@ async function renderCommunitySubs(container, slug, c, cAdmin, isMember){
     row.innerHTML = `<div style="cursor:pointer;"><b>🏷️ ${esc(sub.name)}</b></div>`;
     row.querySelector('div').onclick = ()=>{
       communitySubFilter = sub.slug;
+      resetCommunityPaging();
       goToPostsTab();
     };
     if(cAdmin){
@@ -5541,7 +5681,7 @@ function renderImmersiveFeed(container, posts, onLoadMore){
         : `<img class="immersive-media" src="${p.mediaUrl||p.mediaBase64}">`}
       <div class="immersive-overlay">
         <div class="immersive-author"><img class="avatar" src="${p.authorAvatar||fallbackAvatar()}"><b>${esc(p.authorPseudo)}</b> <a href="#community/${p.communityId}" style="color:#fff;opacity:0.85;" onclick="event.stopPropagation()">· y/${esc(p.communitySlug||p.communityId)}</a></div>
-        ${p.text? `<div class="immersive-text">${esc(p.text)}</div>`:''}
+        ${p.text? `<div class="immersive-text">${mentionHtml(p.text)}</div>`:''}
       </div>
       <div class="immersive-actions">
         <button class="imv-btn ${liked?'active-like':''}" data-act="like">👍<br>${(p.likes||[]).length}</button>
@@ -5554,7 +5694,7 @@ function renderImmersiveFeed(container, posts, onLoadMore){
     `;
     item.querySelectorAll('.imv-btn').forEach(btn=>{
       btn.onclick = ()=>{
-        if(btn.dataset.act==='like'||btn.dataset.act==='dislike'){ optimisticImmersiveVoteUpdate(item, p, btn.dataset.act); vote(p.id, btn.dataset.act); }
+        if(btn.dataset.act==='like'||btn.dataset.act==='dislike'){ optimisticImmersiveVoteUpdate(item, p, btn.dataset.act); vote(p.id, btn.dataset.act, p.authorUid); }
         else if(btn.dataset.act==='comments') openComments(p.id);
         else if(btn.dataset.act==='mute') toggleImmersiveSound(item, btn);
         else if(btn.dataset.act==='delete') deletePost(p.id);
@@ -5613,7 +5753,7 @@ function setupImmersiveObserver(feedEl){
 }
 
 window.addEventListener('message', async (e)=>{
-  if(e.data && e.data.type==='vote'){ vote(e.data.id, e.data.act); }
+  if(e.data && e.data.type==='vote'){ vote(e.data.id, e.data.act, e.data.author); }
   if(e.data && e.data.type==='comments'){ openComments(e.data.id); }
   if(e.data && e.data.type==='delete'){ deletePost(e.data.id); }
   if(e.data && e.data.type==='report'){ openReport(e.data.uid, e.data.pseudo, e.data.targetType, e.data.targetId); }
@@ -6152,6 +6292,11 @@ function renderProfile(main, uid){
         msgBtn.onclick = ()=> location.hash = '#chat/'+uid;
         actions.appendChild(msgBtn);
       }
+      const giftBtn = document.createElement('button');
+      giftBtn.className='secondary'; giftBtn.style.marginLeft='6px';
+      giftBtn.textContent='💛 Offrir des Yappers';
+      giftBtn.onclick = ()=> giftYappersPrompt(uid, main);
+      actions.appendChild(giftBtn);
       const reportBtn = document.createElement('button');
       reportBtn.className='secondary'; reportBtn.style.marginLeft='6px';
       reportBtn.textContent='🚩 Signaler';
@@ -6644,7 +6789,9 @@ function listenStageRequests(code){
       if(!box) return;
       if(snap.empty){ box.innerHTML=''; return; }
       box.innerHTML = '<div class="post-meta" style="margin:10px 0 4px;">Demandes pour monter sur scène :</div>';
-      snap.forEach(d=>{
+      const reqs = []; snap.forEach(d=> reqs.push(d));
+      reqs.sort((a,b)=> (b.data().yappers||0) - (a.data().yappers||0)); // les plus gros Yappers en premier
+      reqs.forEach(d=>{
         const p = d.data();
         const row = document.createElement('div');
         row.className = 'show-req-row';
@@ -6660,7 +6807,7 @@ function listenStageRequests(code){
   showState.extraUnsubs.push(un);
 }
 async function requestToJoinStage(code){
-  await db.collection('shows').doc(code).collection('participants').doc(currentUser.uid).update({requestedStage:true});
+  await db.collection('shows').doc(code).collection('participants').doc(currentUser.uid).update({requestedStage:true, yappers: currentUser.yappers||0});
   toast('Demande envoyée à l\'hôte !');
 }
 
