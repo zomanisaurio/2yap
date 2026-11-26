@@ -1,0 +1,35 @@
+
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+
+    <!-- Accueil -->
+    <url>
+        <loc>https://zomanisaurio.github.io/2yap/#messages</loc>
+        <priority>1.0</priority>
+    </url>
+
+    <!-- Connexion -->
+    <url>
+        <loc>https://zomanisaurio.github.io/2yap/#home</loc>
+        <priority>0.8</priority>
+    </url>
+
+    <!-- Inscription -->
+    <url>
+        <loc>https://zomanisaurio.github.io/2yap/</loc>
+        <priority>0.8</priority>
+    </url>
+
+    <!-- Profil -->
+    <url>
+        <loc>https://zomanisaurio.github.io/2yap/#profile</loc>
+        <priority>0.7</priority>
+    </url>
+
+    <!-- Paramètres -->
+    <url>
+        <loc>https://zomanisaurio.github.io/2yap/#settings</loc>
+        <priority>0.6</priority>
+    </url>
+
+</urlset>
